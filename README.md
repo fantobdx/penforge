@@ -1,9 +1,6 @@
 # penforge
-Creating a minimal docker container of BlackArch or Parrot OS for running an automated scan report.
 
-This docker container can be used for auditing all standard security assessment for you.
-
-There are more than 20 Modules has been Integrated with in the container which can be used for automated pentest.
+Automated penetration testing framework based on BlackArch or Parrot OS Docker containers. Orchestrates 20+ security tools in a single scan, stores results in Postgres and exposes them via a web viewer.
 
 ### Number Of Modules
    - Whois domain analyzer
@@ -28,19 +25,17 @@ There are more than 20 Modules has been Integrated with in the container which c
 
 ### Features
 
-   - Intel-Gathering
-   - Vulnerability Analysis
-   - Security Auditing
-   - OSINT
-   - System Enumeration
+   - Intel gathering & OSINT
+   - Vulnerability analysis
+   - Security auditing
+   - System enumeration
    - Fuzzing
-   - CMS Auditing
-   - SSL Security Auditing
-   - WAF Auditing
-   - Intel-Gathering
-   - Optional Postgres storage + web viewer for scan history
-   - On top of that, you can install your own packages,
-     please check this [repo](https://github.com/ParrotSec/parrot-tools/blob/master/debian/control)
+   - CMS auditing (WordPress, Joomla, Drupal, Silverstripe, Moodle)
+   - SSL/TLS security auditing
+   - WAF detection
+   - Postgres storage + web viewer for scan history
+   - Optional Metasploit auto-matching (lab use)
+   - MCP servers for Claude Code integration
 
 ## How to run it
 
@@ -52,15 +47,7 @@ Create a docker volume to store your automated pentest reports
 
 ```
 
-### Download it from Dockerhub and run it on your system
-
-```
-
-▶ docker run -d --name pentest -d -v pentest-reports:/src vishnunair/pentest:latest
-
-```
-
-### Or run the below commands if you want to play around with docker container in your local machine:
+### Build and run locally
 
 ```
 
@@ -131,7 +118,7 @@ sans coupler la stack de base ; démarrer le lab d'abord :
 
 ```
 ▶ cd ../vuln-lab && docker compose up -d
-▶ cd ../automated-pentest && docker compose -f docker-compose.yml -f docker-compose.lab.yml up -d
+▶ cd ../penforge && docker compose -f docker-compose.yml -f docker-compose.lab.yml up -d
 ```
 
 Deux façons de le déclencher :
@@ -151,7 +138,7 @@ Deux façons de le déclencher :
 2. **Manuel, sur une cible/CIDR précise** (lister ET lancer, par défaut) :
 
    ```
-   ▶ docker compose exec pentest ./pentest.py --metasploit-auto 172.28.0.0/24
+   ▶ docker compose exec pentest ./pentest.py --metasploit-auto 172.20.0.0/24
    ```
 
 Options du mode manuel : `--no-launch` (lister les candidats et leur verdict `check`, sans lancer),
@@ -211,28 +198,15 @@ options:
 
 ```
 
-## All the reports can be seen in /src inside the container however you can also access it from your local machine.
+## Accéder aux rapports
 
-If your docker host is Linux, you can find Docker volumes by /var/lib/docker/volumes path.
+Les rapports sont générés dans `/src` à l'intérieur du container. Sur Linux, le volume est accessible directement :
 
 ```
-
 ▶ docker volume inspect pentest-reports
-
 ```
 
-#### However if you're using MacOs. Try to cd /var/lib/docker/volumes from your MacOS terminal, and you'll get nothing. You see, your Mac machine isn't a real Docker host.
-
-#### So execute the below script to access the reports from your local machine path `~/Documents/` and you can use any browser to view the reports:
-
-
-```
-
-▶ bash ./volume.sh
-
-Check your ~/Documents/src folder for the reports
-
-```
+Le chemin réel est `/var/lib/docker/volumes/pentest-reports/_data`.
 
 
 ## Legal disclaimer:
