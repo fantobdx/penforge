@@ -13,7 +13,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.28.0.0/16
+        - subnet: 172.20.0.0/16
 
 services:
 
@@ -194,7 +194,7 @@ services:
       - "./vuln-lab/certs:/etc/traefik/certs:ro"
     networks:
       lab:
-        ipv4_address: 172.28.0.10
+        ipv4_address: 172.20.0.10
         aliases:
           - traefik.lab.local
           - juice.lab.local
@@ -288,19 +288,19 @@ services:
     container_name: lab-dnsmasq
     command:
       - "--local=/lab.local/"
-      - "--address=/juice.lab.local/172.28.0.10"
-      - "--address=/dvwa.lab.local/172.28.0.10"
-      - "--address=/vampi.lab.local/172.28.0.10"
-      - "--address=/webgoat.lab.local/172.28.0.10"
-      - "--address=/mutillidae.lab.local/172.28.0.10"
-      - "--address=/traefik.lab.local/172.28.0.10"
+      - "--address=/juice.lab.local/172.20.0.10"
+      - "--address=/dvwa.lab.local/172.20.0.10"
+      - "--address=/vampi.lab.local/172.20.0.10"
+      - "--address=/webgoat.lab.local/172.20.0.10"
+      - "--address=/mutillidae.lab.local/172.20.0.10"
+      - "--address=/traefik.lab.local/172.20.0.10"
       - "--server=1.1.1.1"
       - "--server=8.8.8.8"
       - "--log-queries"
     cap_add: [NET_ADMIN]
     networks:
       lab:
-        ipv4_address: 172.28.0.11
+        ipv4_address: 172.20.0.11
 
 volumes:
   pentest-reports:
