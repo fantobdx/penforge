@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Files d'attente - Pentest reports{% endblock %}
+{% block content %}
+<h1>Files d'attente</h1>
+<p>File Redis du broker Celery et étapes actives. Historique sur 1 h, relevé toutes les 2 s : un changement entre deux relevés peut donc ne pas apparaître si une tâche passe d'un état à l'autre en moins de 2 s.</p>
+<h2>Tâches Celery</h2>
+<canvas id="queue-chart" height="120"></canvas>
+<h2>Étapes actives</h2>
+<p>Une étape active occupe un port Tor loué. La capacité est le nombre de ports, donc de workers simultanés.</p>
+<canvas id="workers-chart" height="120"></canvas>
+<h2>Redis</h2>
+<canvas id="redis-chart" height="120"></canvas>
+<h2>Tâches en attente (<span id="pending-count">0</span>)</h2>
+<table>
+  <thead><tr><th>Tâche</th><th>Arguments</th></tr></thead>
+  <tbody id="pending-body"></tbody>
+</table>
+<h2>Tâches en cours (<span id="unacked-count">0</span>)</h2>
+<table>
+  <thead><tr><th>Tâche</th><th>Arguments</th></tr></thead>
+  <tbody id="unacked-body"></tbody>
+</table>
+<h2>Journal de la file</h2>
+<table>
+  <thead><tr><th>Heure</th><th>Événement</th><th>Tâche</th><th>Arguments</th></tr></thead>
+  <tbody id="events-body"></tbody>
+</table>
+<p class="error" id="status"></p>
+<script src="/static/chart.umd.min.js"></script>
+<script>
+  const METRICS_URL = "/queues/metrics";
+  const POLL_MS = 2000;
+  const WINDOW = 1800;
+  const EVENTS_WINDOW = 500;
+  let lastT = 0;
+  const labels = [];
+  const series = { pending: [], unacked: [], busy: [], capacity: [], memory_mb: [], clients: [] };
+  const events = [];
+
+  function line(label, data, color, options = {}) {
+    return { label, data, borderColor: color, backgroundColor: color, pointRadius: 0, tension: 0.2, ...options };
+  }
+
+  const baseOptions = {
+    animation: false,
+    responsive: true,
+    interaction: { mode: "index", intersect: false },
+    scales: {
+      x: { ticks: { maxTicksLimit: 8 } },
+      y: { beginAtZero: true, ticks: { precision: 0 } },
+    },
+  };
+
+  const queueChart = new Chart(document.getElementById("queue-chart"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        line("En attente", series.pending, "#1a5fb4"),
+        line("En cours (non acquittées)", series.unacked, "#a66300"),
+      ],
+    },
+    options: baseOptions,
+  });
+
+  const workersChart = new Chart(document.getElementById("workers-chart"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        line("Étapes actives", series.busy, "#1e7e34"),
+        line("Capacité", series.capacity, "#666666", { borderDash: [6, 4] }),
+      ],
+    },
+    options: baseOptions,
+  });
+
+  const redisChart = new Chart(document.getElementById("redis-chart"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        line("Mémoire utilisée (Mo)", series.memory_mb, "#1a5fb4"),
+        line("Clients connectés", series.clients, "#b02a37", { yAxisID: "y1" }),
+      ],
+    },
+    options: {
+      ...baseOptions,
+      scales: {
+        x: baseOptions.scales.x,
+        y: { beginAtZero: true },
+        y1: { beginAtZero: true, position: "right", ticks: { precision: 0 }, grid: { drawOnChartArea: false } },
+      },
+    },
+  });
+
+  const charts = [queueChart, workersChart, redisChart];
+
+  function appendSamples(samples) {
+    for (const sample of samples) {
+      labels.push(new Date(sample.t).toLocaleTimeString("fr-FR"));
+      for (const key of Object.keys(series)) series[key].push(sample[key]);
+      lastT = sample.t;
+    }
+    const excess = labels.length - WINDOW;
+    if (excess > 0) {
+      labels.splice(0, excess);
+      for (const key of Object.keys(series)) series[key].splice(0, excess);
+    }
+    if (samples.length > 0) charts.forEach((chart) => chart.update("none"));
+  }
+
+  function appendEvents(batch) {
+    if (batch.length === 0) return;
+    for (const event of batch) {
+      events.unshift({ ...event, time: new Date(event.t).toLocaleTimeString("fr-FR") });
+    }
+    events.length = Math.min(events.length, EVENTS_WINDOW);
+    fillRows("events-body", events, (e) => [e.time, e.event, e.task, e.args]);
+  }
+
+  function fillRows(tbodyId, rows, columns) {
+    const tbody = document.getElementById(tbodyId);
+    tbody.replaceChildren(...rows.map((row) => {
+      const tr = document.createElement("tr");
+      for (const value of columns(row)) {
+        const td = document.createElement("td");
+        td.textContent = value ?? "";
+        tr.appendChild(td);
+      }
+      return tr;
+    }));
+  }
+
+  function renderTasks(tasks) {
+    document.getElementById("pending-count").textContent = tasks.pending.length;
+    document.getElementById("unacked-count").textContent = tasks.unacked.length;
+    fillRows("pending-body", tasks.pending, (t) => [t.task, t.args]);
+    fillRows("unacked-body", tasks.unacked, (t) => [t.task, t.args]);
+  }
+
+  async function tick() {
+    try {
+      const response = await fetch(`${METRICS_URL}?since=${lastT}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const { samples, events: batch, tasks } = await response.json();
+      appendSamples(samples);
+      appendEvents(batch);
+      renderTasks(tasks);
+      document.getElementById("status").textContent = "";
+    } catch (error) {
+      document.getElementById("status").textContent = "Lecture impossible : " + error.message;
+    }
+  }
+
+  tick();
+  setInterval(tick, POLL_MS);
+</script>
+{% endblock %}

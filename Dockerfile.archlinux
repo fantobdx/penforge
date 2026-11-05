@@ -1,0 +1,97 @@
+FROM blackarchlinux/blackarch:latest
+
+LABEL maintainer=Fantomas
+
+# uv remplace pip pour toutes les installations Python de ce Dockerfile (binaire officiel,
+# pas de dépendance supplémentaire côté pacman).
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /usr/local/bin/
+
+RUN pacman -Syu --noconfirm --needed --disable-sandbox \
+    git curl openssl ca-certificates traceroute whois \
+    theharvester dirb wafw00f \
+    nikto perl-libwww perl-json perl-xml-writer whatweb wpscan joomscan \
+    sslscan wfuzz dirbuster metagoofil tor proxychains-ng \
+    python base-devel postgresql-libs python-legacy-cgi unzip \
+    gitleaks sqlmap sploitctl \
+    metasploit nmap hydra
+
+# sploitctl -f 0 : toutes les sources (exploit-db, m00-exploits, lsd-pl, packetstorm depuis 1999),
+# décomprimées puis les archives compressées supprimées (-X -R). Couverture maximale choisie
+# volontairement malgré la taille/durée de build que ça ajoute (packetstorm à lui seul compte des
+# dizaines d'archives). Résultat sous /usr/share/exploits (défaut), interrogé par
+# pentest.step_sploitctl_lookup() via `sploitctl -s <regex>`.
+RUN sploitctl -f 0 -XR
+
+# nuclei : binaire épinglé (version + sha256 vérifiés), templates communautaires téléchargés au
+# build dans /opt/nuclei-templates. Ne pas ajouter -duc ici : il désactive aussi la mise à jour
+# des templates. Les templates sont référencés par chemin absolu dans pentest.py.
+RUN curl -fsSL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip && \
+    echo "ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6  /tmp/nuclei.zip" | sha256sum -c - && \
+    unzip -o /tmp/nuclei.zip nuclei -d /usr/local/bin && \
+    rm /tmp/nuclei.zip && \
+    nuclei -ut -ud /opt/nuclei-templates
+
+# katana : crawler ProjectDiscovery, binaire épinglé (version + sha256 vérifiés). Fournit les URL
+# réelles du site, utilisées par l'étape wfuzz.
+RUN curl -fsSL -o /tmp/katana.zip https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip && \
+    echo "cb027ae99d0757061b70c07a15c7a80f62c5a535ab52c4a329f80c4b0a7309d2  /tmp/katana.zip" | sha256sum -c - && \
+    unzip -o /tmp/katana.zip katana -d /usr/local/bin && \
+    rm /tmp/katana.zip
+
+# trufflehog : binaire épinglé (version + sha256 vérifiés), utilisé par l'étape trufflehog_web
+# sur les pages téléchargées depuis le crawl katana (pas de sous-commande "url" côté trufflehog :
+# scan en mode "filesystem" sur le dossier téléchargé).
+RUN curl -fsSL -o /tmp/trufflehog.tar.gz https://github.com/trufflesecurity/trufflehog/releases/download/v3.99.7/trufflehog_3.99.7_linux_amd64.tar.gz && \
+    echo "bdbea0508e439b144f49de14e775908de5f902f3d14ea7ae8354bae72b0b72ef  /tmp/trufflehog.tar.gz" | sha256sum -c - && \
+    tar -xzf /tmp/trufflehog.tar.gz -C /usr/local/bin trufflehog && \
+    rm /tmp/trufflehog.tar.gz
+
+# getoptlong et resolv-replace ne sont plus des gems par défaut depuis Ruby 3.4 ; whatweb les
+# exige (getoptlong dans la même version que le bundle vendu dans le paquet Arch).
+RUN gem install getoptlong -v 0.2.1 && gem install resolv-replace -v 0.2.0
+
+# Configuration proxychains globale : round_robin sur les instances Tor du pool (9050 à 9052 pour
+# SCAN_WORKERS=3, comme pentest.write_proxychains_conf).
+RUN { \
+      printf 'round_robin\nchain_len = 1\nproxy_dns\nremote_dns_subnet 224\ntcp_read_time_out 15000\ntcp_connect_time_out 8000\n[ProxyList]\n'; \
+      for port in 9050 9051 9052; do echo "socks5 127.0.0.1 $port"; done; \
+    } > /etc/proxychains.conf
+
+RUN mkdir -p /src
+
+WORKDIR /src
+
+# wfuzz dépend du pycurl fourni par pacman, lié à GnuTLS : "Pycurl is not compiled
+# against Openssl. Wfuzz might not work correctly when fuzzing SSL sites."
+# Le wheel manylinux de PyPI embarque son propre libcurl lié à OpenSSL, donc on
+# le réinstalle par-dessus sans dépendance supplémentaire.
+RUN uv pip install --system --break-system-packages --no-cache --reinstall-package pycurl pycurl
+
+RUN uv pip install --system --break-system-packages --no-cache argparse netaddr mechanize psycopg2-binary "celery[redis]==5.6.3";\
+    git clone https://github.com/hahwul/a2sv.git &&\
+    find /src/a2sv -name '*.py' -exec sh -c 'for f; do expand -t 8 "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done' sh {} + &&\
+    find /src/a2sv -name '*.py' -exec sed -i 's/^\( *\)print \(.*\)$/\1print(\2)/;s/iteritems()/items()/g;s/urllib2/urllib.request/g;s/from urlparse import/from urllib.parse import/;s/^import Queue$/import queue as Queue/;s/xrange(/range(/g;s/\.encode(.hex.)/.hex()/g;s/ord(recv\[0\])/recv[0]/g;s/ord(strLastMessage\[-7\])/strLastMessage[-7]/g;s/\.communicate()\[0\]/.communicate()[0].decode(errors="replace")/g' {} + &&\
+    git clone https://github.com/CyberPrince-hub/XSSZypheron.git /src/XSSZypheron &&\
+    git -C /src/XSSZypheron checkout ba4fec89cf9aa133eccb0bf08f0c241e23eb9e5a &&\
+    uv pip install --system --break-system-packages --no-cache -r /src/XSSZypheron/requirements.txt &&\
+    git clone https://github.com/s0md3v/XSStrike.git && uv pip install --system --break-system-packages --no-cache -r /src/XSStrike/requirements.txt;\
+    uv pip install --system --break-system-packages --no-cache "setuptools==81.0.0" droopescan "cement<3" wapiti3 "sslyze>=6,<7" "cryptography>=43,<47" "zombie-imp" stamina git-dumper
+
+COPY a2sv-overrides/ /src/a2sv/module/
+
+# blackarch-mcp : serveur MCP exposant l'inventaire d'outils BlackArch (lu via
+# `pacman -Qg` sur les groupes blackarch-*, d'où le clone dans cette image et
+# pas dans web/Dockerfile qui n'a pas ces paquets) à un client MCP (Claude
+# Code). Pas de setup.py côté upstream : le module se lance depuis la racine
+# du clone (working_dir défini côté docker-compose pour le service dédié).
+# requirements.txt demande mcp>=1.27.1 qui résout en mcp 2.x : fastmcp y a été
+# renommé (mcp.server.fastmcp -> mcp.server.mcpserver), ce que le code du repo
+# ne gère pas encore. On épingle donc mcp<2 (API v1, celle que le code importe).
+RUN git clone --depth 1 https://github.com/L0ced/blackarch-mcp.git /opt/blackarch-mcp && \
+    uv pip install --system --break-system-packages --no-cache "mcp<2"
+
+COPY scripts/db_insert.py scripts/ioc_extract.py pentest.py tasks.py /src/
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["sh", "-c", "celery -A tasks worker --concurrency=${SCAN_WORKERS:-3} --loglevel=info"]

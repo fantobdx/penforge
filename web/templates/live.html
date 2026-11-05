@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Logs - {{ scan.domain }}{% endblock %}
+{% block content %}
+<h1>Logs : {{ scan.domain }}</h1>
+<p><a href="/scan/{{ scan.id }}">Retour au scan</a></p>
+<div id="log"></div>
+<script>
+  const log = document.getElementById("log");
+  const source = new EventSource("/scan/{{ scan.id }}/logs");
+  source.onmessage = (event) => {
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.textContent += JSON.parse(event.data) + "\n";
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  };
+  source.addEventListener("end", () => source.close());
+</script>
+{% endblock %}

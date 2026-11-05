@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Scan {{ scan.domain }}{% endblock %}
+{% block content %}
+<h1>Scan {{ scan.domain }}</h1>
+<p>Démarré : {{ scan.started_at }} — Terminé : {{ scan.finished_at or "en cours" }}</p>
+<p><a href="/scan/{{ scan.id }}/live">Voir les logs{% if not scan.finished_at %} en direct{% endif %}</a></p>
+
+<p>
+{% if running %}
+<form method="post" action="/scan/{{ scan.id }}/stop" onsubmit="return confirm('Arrêter ce scan (toutes les étapes en cours) ?');" style="display: inline;">
+  <button type="submit" class="danger">Arrêter</button>
+</form>
+{% elif resumable %}
+<form method="post" action="/scan/{{ scan.id }}/resume">
+  <button type="submit">Reprendre</button>
+</form>
+{% endif %}
+</p>
+
+{% for step in steps %}
+<h2>
+  {{ step.label }} <span class="status status-{{ step.status }}">{{ step.status }}</span>
+  {% if step.status == "RUNNING" %}
+  <form method="post" action="/scan/{{ scan.id }}/step/{{ step.step_id }}/skip"
+        onsubmit="return confirm('Sauter {{ step.label }} et continuer le scan ?');" style="display: inline;">
+    <button type="submit">Sauter</button>
+  </form>
+  {% endif %}
+  {% if not running and step.rerunnable %}
+  <form method="post" action="/scan/{{ scan.id }}/step/{{ step.step_id }}/rerun"
+        onsubmit="return confirm('Relancer {{ step.label }} ?');" style="display: inline;">
+    <button type="submit">Relancer</button>
+  </form>
+  {% endif %}
+</h2>
+{% if step.note %}<p class="note">{{ step.note }}</p>{% endif %}
+{% if step.report_content %}
+  <pre>{{ step.report_content }}</pre>
+{% elif step.has_file %}
+  <p><a href="/scan/{{ scan.id }}/step/{{ step.step_id }}/file">Voir le rapport ({{ step.report_path }})</a></p>
+{% else %}
+  <p>Pas de contenu enregistré{% if step.report_path %} ({{ step.report_path }}){% endif %}.</p>
+{% endif %}
+{% endfor %}
+{% endblock %}

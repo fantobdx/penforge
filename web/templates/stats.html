@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Mesure Postgres - Pentest reports{% endblock %}
+{% block content %}
+<h1>Mesure Postgres</h1>
+<p>Démarre la mesure avant un scan, arrête-la à la fin. Les requêtes de cette page sont retirées du total des connexions.</p>
+<p>
+  <button id="start" type="button">Démarrer</button>
+  <button id="stop" type="button">Arrêter</button>
+</p>
+<table>
+  <thead>
+    <tr><th>Mesure</th><th>Valeur</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Durée</td><td id="duration">-</td></tr>
+    <tr><td>Connexions Postgres ouvertes</td><td id="sessions">-</td></tr>
+    <tr><td>Transactions validées</td><td id="xacts">-</td></tr>
+    <tr><td>Lignes ajoutées dans scan_logs</td><td id="logs">-</td></tr>
+  </tbody>
+</table>
+<p class="error" id="status"></p>
+<script>
+  const COUNTERS_URL = "/stats/counters";
+  const POLL_MS = 2000;
+  let baseline = null;
+  let startedAt = null;
+  let polls = 0;
+  let timer = null;
+
+  async function fetchCounters() {
+    const response = await fetch(COUNTERS_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    polls += 1;
+    return response.json();
+  }
+
+  function render(current) {
+    // Chaque requête de cette page ouvre une connexion : on la retire du total.
+    const ownRequests = polls - baseline.polls;
+    document.getElementById("duration").textContent = Math.round((Date.now() - startedAt) / 1000) + " s";
+    document.getElementById("sessions").textContent = current.sessions - baseline.sessions - ownRequests;
+    document.getElementById("xacts").textContent = current.xact_commit - baseline.xact_commit;
+    document.getElementById("logs").textContent = current.log_rows - baseline.log_rows;
+  }
+
+  async function tick() {
+    try {
+      const current = await fetchCounters();
+      if (baseline === null) {
+        baseline = { ...current, polls };
+        startedAt = Date.now();
+      }
+      render(current);
+      document.getElementById("status").textContent = "";
+    } catch (error) {
+      document.getElementById("status").textContent = "Lecture impossible : " + error.message;
+    }
+  }
+
+  function stop() {
+    clearInterval(timer);
+    timer = null;
+  }
+
+  document.getElementById("start").addEventListener("click", () => {
+    stop();
+    baseline = null;
+    timer = setInterval(tick, POLL_MS);
+    tick();
+  });
+  document.getElementById("stop").addEventListener("click", stop);
+</script>
+{% endblock %}
+</content>

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Nouveau scan{% endblock %}
+{% block content %}
+<h1>Nouveau scan</h1>
+{% if no_domain %}
+  <p class="error">Aucun domaine saisi.</p>
+{% endif %}
+{% if invalid %}
+  <p class="error">Domaines invalides, rien n'a été ajouté : {{ invalid | join(", ") }}</p>
+{% endif %}
+<form method="post" action="/jobs" enctype="multipart/form-data">
+  <p>Un domaine par ligne. Les lignes vides et celles commençant par <code>#</code> sont ignorées.</p>
+  <textarea name="domains" placeholder="exemple.com&#10;autre-domaine.fr">{{ domains_text }}</textarea>
+  <p>Ou importer un fichier texte : <input type="file" name="file" accept=".txt,text/plain"></p>
+  <fieldset>
+    <legend>Outils à exclure (optionnel)</legend>
+    {% for step_id, label in steps %}
+    <label style="display: block;">
+      <input type="checkbox" name="exclude_steps" value="{{ step_id }}"> {{ label }}
+    </label>
+    {% endfor %}
+  </fieldset>
+  <p><button type="submit">Ajouter à la file</button></p>
+</form>
+{% endblock %}

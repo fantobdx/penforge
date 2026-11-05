@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ label }} - fichiers{% endblock %}
+{% block content %}
+<h1>{{ label }}</h1>
+<p><a href="/scan/{{ scan_id }}">Retour au scan</a></p>
+<ul>
+  {% for entry in entries %}
+  <li><a href="/scan/{{ scan_id }}/step/{{ step_id }}/file/{{ (subpath + '/' + entry) if subpath else entry }}">{{ entry }}</a></li>
+  {% endfor %}
+</ul>
+{% endblock %}

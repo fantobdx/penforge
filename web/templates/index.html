@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Scans - Pentest reports{% endblock %}
+{% block content %}
+<h1>Scans</h1>
+{% if jobs %}
+<h2>File d'attente</h2>
+<table>
+  <thead>
+    <tr><th>Domaine</th><th>Statut</th><th>Outil en cours</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ job.domain }}</td>
+      <td><a href="/scan/{{ job.scan_id }}/live">{{ job.status }}</a></td>
+      <td>{{ job.current_step or "-" }}</td>
+      <td>
+        {% if job.status == "running" %}
+        <form method="post" action="/scan/{{ job.scan_id }}/stop" onsubmit="return confirm('Arrêter le scan {{ job.domain }} ?');">
+          <button type="submit" class="danger">Arrêter</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% if not scans %}
+  <p>Aucun scan enregistré pour le moment. Ajoutez un domaine depuis <a href="/jobs/new">Nouveau scan</a>.</p>
+{% else %}
+<table>
+  <thead>
+    <tr><th>Domaine</th><th>Démarré</th><th>Terminé</th><th>OK</th><th>FAIL</th><th>SKIP</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for scan in scans %}
+    <tr>
+      <td><a href="/scan/{{ scan.id }}">{{ scan.domain }}</a></td>
+      <td>{{ scan.started_at }}</td>
+      <td>{{ scan.finished_at or "en cours" }}</td>
+      <td>{{ scan.ok_count if scan.ok_count is not none else "-" }}</td>
+      <td>{{ scan.fail_count if scan.fail_count is not none else "-" }}</td>
+      <td>{{ scan.skip_count if scan.skip_count is not none else "-" }}</td>
+      <td>
+        <form method="post" action="/scan/{{ scan.id }}/delete" onsubmit="return confirm('Supprimer le scan {{ scan.domain }} ?');">
+          <button type="submit" class="danger">Supprimer</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}Pentest reports{% endblock %}</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem auto; max-width: 960px; color: #1a1a1a; background: #fafafa; }
+    a { color: #1a5fb4; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
+    th { background: #eee; }
+    .status { font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 3px; font-size: 0.85em; }
+    .status-OK { background: #e6f4ea; color: #1e7e34; }
+    .status-FAIL { background: #fdecea; color: #b02a37; }
+    .status-SKIP { background: #f1f1f1; color: #666; }
+    .status-RUNNING { background: #e8f0fe; color: #1a5fb4; }
+    .status-STOPPED { background: #fff4e5; color: #a66300; }
+    .note { color: #806b00; font-size: 0.9em; }
+    pre { background: #fff; border: 1px solid #ddd; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
+    nav { margin-bottom: 1.5rem; }
+    form { margin: 0; }
+    button.danger { background: #fdecea; color: #b02a37; border: 1px solid #b02a37; border-radius: 3px; padding: 0.2rem 0.6rem; cursor: pointer; }
+    button.danger:hover { background: #b02a37; color: #fff; }
+    button { background: #1a5fb4; color: #fff; border: 0; border-radius: 3px; padding: 0.4rem 1rem; cursor: pointer; }
+    textarea { width: 100%; min-height: 12rem; font-family: monospace; box-sizing: border-box; }
+    .error { color: #b02a37; }
+    #log { background: #111; color: #ddd; padding: 1rem; height: 70vh; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <nav><a href="/">Liste des scans</a> &middot; <a href="/jobs/new">Nouveau scan</a> &middot; <a href="/stats">Mesure Postgres</a> &middot; <a href="/queues">Files d'attente</a></nav>
+  {% block content %}{% endblock %}
+</body>
+</html>

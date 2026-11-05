@@ -1,0 +1,308 @@
+# ============================================================================
+#  Stack principale (toujours démarrée) :
+#    docker compose up -d
+#
+#  + lab vulnérable (Traefik + Juice Shop / DVWA / VAmPI / WebGoat / Mutillidae) :
+#    docker compose --profile lab up -d
+#    ou : cd vuln-lab && ./lab.sh up
+# ============================================================================
+
+networks:
+  default: {}
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${PGDATABASE:-pentest}
+      POSTGRES_USER: ${PGUSER:-pentest}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?definir PGPASSWORD dans le fichier .env}
+      TZ: Europe/Paris
+    volumes:
+      - pentest-db-data:/var/lib/postgresql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-pentest} -d ${PGDATABASE:-pentest}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--requirepass", "${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Workers pentest ────────────────────────────────────────────────────────
+
+  pentest:
+    build:
+      context: .
+      dockerfile: Dockerfile.archlinux
+    restart: unless-stopped
+    environment:
+      SCAN_WORKERS: ${SCAN_WORKERS:-3}
+      TZ: Europe/Paris
+      PGTZ: Europe/Paris
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${PGDATABASE:-pentest}
+      PGUSER: ${PGUSER:-pentest}
+      PGPASSWORD: ${PGPASSWORD:?definir PGPASSWORD dans le fichier .env}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - pentest-reports:/reports
+    networks: [default, lab]
+    tty: true
+
+  blackarch-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.archlinux
+    restart: unless-stopped
+    working_dir: /opt/blackarch-mcp
+    command: ["python3", "-m", "blackarch_mcp.server", "--host", "0.0.0.0", "--port", "8765"]
+    environment:
+      BLACKARCH_MCP_STATE_DIR: /var/lib/blackarch-mcp
+      TZ: Europe/Paris
+    ports:
+      # Loopback uniquement : request_tool_run() exécute de vrais outils BlackArch
+      # dès approbation, sans authentification applicative autre que l'approval-gating.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - blackarch-mcp-state:/var/lib/blackarch-mcp
+    networks: [default, lab]
+
+  pentest-mcp:
+    build:
+      context: .
+      dockerfile: pentest-mcp/Dockerfile
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Paris
+      PGTZ: Europe/Paris
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${PGDATABASE:-pentest}
+      PGUSER: ${PGUSER:-pentest}
+      PGPASSWORD: ${PGPASSWORD:?definir PGPASSWORD dans le fichier .env}
+      # start_scan envoie une tâche au même broker que le worker pentest (tasks.py) : mêmes URLs
+      # que son service, jamais lues ici autrement (ce conteneur n'exécute aucune tâche lui-même).
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # Loopback uniquement, comme blackarch-mcp. Historiquement justifié par le lecture-seule ;
+      # ce serveur expose maintenant start_scan/skip_step (voir pentest_mcp.py) sans authentification
+      # applicative propre -- seul ce binding (et l'absence d'exposition sur le réseau lab/Docker
+      # par ailleurs) limite qui peut déclencher un scan ou sauter une étape via ce port.
+      - "127.0.0.1:8766:8766"
+    volumes:
+      - pentest-reports:/reports:ro
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    environment:
+      WEB_USER: ${WEB_USER:-admin}
+      WEB_PASSWORD: ${WEB_PASSWORD:?definir WEB_PASSWORD dans le fichier .env}
+      TZ: Europe/Paris
+      PGTZ: Europe/Paris
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${PGDATABASE:-pentest}
+      PGUSER: ${PGUSER:-pentest}
+      PGPASSWORD: ${PGPASSWORD:?definir PGPASSWORD dans le fichier .env}
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - pentest-reports:/reports:ro
+      - ./certs:/certs:ro
+
+  # ── Lab vulnérable (profile : lab) ────────────────────────────────────────
+  # Démarrage : docker compose --profile lab up -d
+  # ou via     : cd vuln-lab && ./lab.sh up
+
+  traefik:
+    profiles: [lab]
+    image: traefik:v3.5
+    container_name: lab-traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--experimental.otlpLogs=true"
+      - "--accesslog.otlp=true"
+      - "--accesslog.otlp.http.endpoint=http://otel-viewer:4318/v1/logs"
+      - "--log.otlp=true"
+      - "--log.otlp.http.endpoint=http://otel-viewer:4318/v1/logs"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.addEntryPointsLabels=true"
+      - "--metrics.prometheus.addRoutersLabels=true"
+      - "--metrics.otlp=true"
+      - "--metrics.otlp.http.endpoint=http://otel-viewer:4318/v1/metrics"
+      - "--tracing.serviceName=traefik-lab"
+      - "--tracing.otlp.http.endpoint=http://otel-viewer:4318"
+    ports:
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - "./vuln-lab/dynamic.yml:/etc/traefik/dynamic.yml:ro"
+      - "./vuln-lab/certs:/etc/traefik/certs:ro"
+    networks:
+      lab:
+        ipv4_address: 172.28.0.10
+        aliases:
+          - traefik.lab.local
+          - juice.lab.local
+          - dvwa.lab.local
+          - vampi.lab.local
+          - webgoat.lab.local
+          - mutillidae.lab.local
+  otel-viewer:
+    profiles: [lab]
+    image: ghcr.io/ctrlspice/otel-desktop-viewer:latest
+    container_name: lab-otel-viewer
+    restart: unless-stopped
+    command: ["--host", "0.0.0.0", "--open-browser=false"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks: [lab]
+
+  juiceshop:
+    profiles: [lab]
+    image: bkimminich/juice-shop:latest
+    container_name: lab-juiceshop
+    restart: unless-stopped
+    networks: [lab]
+
+  dvwa:
+    profiles: [lab]
+    image: ghcr.io/digininja/dvwa:latest
+    container_name: lab-dvwa
+    restart: unless-stopped
+    environment:
+      - DB_SERVER=dvwa-db
+      - DB_DATABASE=dvwa
+      - DB_USER=dvwa
+      - DB_PASSWORD=p@ssw0rd
+    depends_on:
+      - dvwa-db
+    networks: [lab]
+
+  dvwa-db:
+    profiles: [lab]
+    image: mariadb:10
+    container_name: lab-dvwa-db
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=dvwa
+      - MYSQL_DATABASE=dvwa
+      - MYSQL_USER=dvwa
+      - MYSQL_PASSWORD=p@ssw0rd
+    networks: [lab]
+
+  vampi:
+    profiles: [lab]
+    image: erev0s/vampi:latest
+    container_name: lab-vampi
+    restart: unless-stopped
+    environment:
+      - vulnerable=1
+    networks: [lab]
+
+  webgoat:
+    profiles: [lab]
+    image: webgoat/webgoat:latest
+    container_name: lab-webgoat
+    restart: unless-stopped
+    environment:
+      - WEBGOAT_HOST=0.0.0.0
+      - WEBWOLF_HOST=0.0.0.0
+      - TZ=Europe/Paris
+    healthcheck:
+      test:
+        - "CMD"
+        - "bash"
+        - "-c"
+        - "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /WebGoat/login HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -qE ' (2|3)[0-9]{2} '"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    networks: [lab]
+
+  mutillidae:
+    profiles: [lab]
+    image: citizenstig/nowasp:latest
+    container_name: lab-mutillidae
+    restart: unless-stopped
+    networks: [lab]
+
+  dnsmasq:
+    profiles: [lab]
+    image: 4km3/dnsmasq:2.90-r3
+    container_name: lab-dnsmasq
+    command:
+      - "--local=/lab.local/"
+      - "--address=/juice.lab.local/172.28.0.10"
+      - "--address=/dvwa.lab.local/172.28.0.10"
+      - "--address=/vampi.lab.local/172.28.0.10"
+      - "--address=/webgoat.lab.local/172.28.0.10"
+      - "--address=/mutillidae.lab.local/172.28.0.10"
+      - "--address=/traefik.lab.local/172.28.0.10"
+      - "--server=1.1.1.1"
+      - "--server=8.8.8.8"
+      - "--log-queries"
+    cap_add: [NET_ADMIN]
+    networks:
+      lab:
+        ipv4_address: 172.28.0.11
+
+volumes:
+  pentest-reports:
+  pentest-db-data:
+  blackarch-mcp-state:

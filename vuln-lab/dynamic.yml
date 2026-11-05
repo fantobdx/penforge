@@ -1,0 +1,121 @@
+# ============================================================================
+#  Config dynamique Traefik (file provider) — routage par Host.
+#  Traefik joint les conteneurs par leur nom de service via le DNS Docker
+#  du réseau "lab". Aucune dépendance au socket Docker.
+#
+#  Chaque app est exposée en HTTP (web, :80) ET en HTTPS (websecure, :443).
+#  Certificat auto-signé wildcard *.lab.local : certs/lab.crt + certs/lab.key
+#  (à régénérer si besoin, voir README). Les clients doivent accepter
+#  l'exception / utiliser curl -k.
+# ============================================================================
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/lab.crt
+      keyFile: /etc/traefik/certs/lab.key
+
+http:
+  routers:
+    dashboard:
+      rule: "Host(`traefik.lab.local`)"
+      entryPoints: [web]
+      service: api@internal
+    dashboard-tls:
+      rule: "Host(`traefik.lab.local`)"
+      entryPoints: [websecure]
+      service: api@internal
+      tls: {}
+
+    juice:
+      rule: "Host(`juice.lab.local`)"
+      entryPoints: [web]
+      service: juice
+    juice-tls:
+      rule: "Host(`juice.lab.local`)"
+      entryPoints: [websecure]
+      service: juice
+      tls: {}
+
+    dvwa:
+      rule: "Host(`dvwa.lab.local`)"
+      entryPoints: [web]
+      service: dvwa
+    dvwa-tls:
+      rule: "Host(`dvwa.lab.local`)"
+      entryPoints: [websecure]
+      service: dvwa
+      tls: {}
+
+    vampi:
+      rule: "Host(`vampi.lab.local`)"
+      entryPoints: [web]
+      service: vampi
+    vampi-tls:
+      rule: "Host(`vampi.lab.local`)"
+      entryPoints: [websecure]
+      service: vampi
+      tls: {}
+
+    webgoat:
+      rule: "Host(`webgoat.lab.local`)"
+      entryPoints: [web]
+      service: webgoat
+      middlewares: [webgoat-root]
+    webgoat-tls:
+      rule: "Host(`webgoat.lab.local`)"
+      entryPoints: [websecure]
+      service: webgoat
+      middlewares: [webgoat-root]
+      tls: {}
+
+    mutillidae:
+      rule: "Host(`mutillidae.lab.local`)"
+      entryPoints: [web]
+      service: mutillidae
+    mutillidae-tls:
+      rule: "Host(`mutillidae.lab.local`)"
+      entryPoints: [websecure]
+      service: mutillidae
+      tls: {}
+
+    # Reverse-proxy d'un hôte du lab vers la Freebox, en GARDANT l'URL *.lab.local côté
+    # navigateur (pas de redirection). Renommer freebox.lab.local si besoin. Ajouter
+    # "127.0.0.1 freebox.lab.local" dans /etc/hosts.
+    freebox:
+      rule: "Host(`fall.lab.local`)"
+    #rule: "Host(`freebox.lab.local`)"
+      entryPoints: [web]
+      service: freebox
+    freebox-tls:
+      rule: "Host(`fall.lab.local`)"
+      entryPoints: [websecure]
+      service: freebox
+      tls: {}
+
+  middlewares:
+    # webgoat.lab.local/ -> /WebGoat/ (WebGoat ne sert rien à la racine)
+    webgoat-root:
+      redirectRegex:
+        regex: "^(https?)://webgoat\\.lab\\.local/?$"
+        replacement: "${1}://webgoat.lab.local/WebGoat/"
+        permanent: false
+
+    juice:
+      loadBalancer:
+        servers:
+          - url: "http://juiceshop:3000"
+    dvwa:
+      loadBalancer:
+        servers:
+          - url: "http://dvwa:80"
+    vampi:
+      loadBalancer:
+        servers:
+          - url: "http://vampi:5000"
+    webgoat:
+      loadBalancer:
+        servers:
+          - url: "http://webgoat:8080"
+    mutillidae:
+      loadBalancer:
+        servers:
+          - url: "http://mutillidae:80"
