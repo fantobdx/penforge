@@ -28,7 +28,6 @@ services:
       TZ: Europe/Paris
     volumes:
       - pentest-db-data:/var/lib/postgresql
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -37,6 +36,21 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+
+  db-init:
+    image: postgres:18-alpine
+    command: >
+      sh -c "psql -h db -U $${PGUSER:-pentest} -d $${PGDATABASE:-pentest} -f /schema.sql -v ON_ERROR_STOP=0 -q"
+    environment:
+      PGPASSWORD: ${PGPASSWORD:?definir PGPASSWORD dans le fichier .env}
+      PGUSER: ${PGUSER:-pentest}
+      PGDATABASE: ${PGDATABASE:-pentest}
+    volumes:
+      - ./db/schema.sql:/schema.sql:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
 
   redis:
     image: redis:8-alpine
@@ -68,6 +82,7 @@ services:
       PGPASSWORD: ${PGPASSWORD:?definir PGPASSWORD dans le fichier .env}
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/1
+      WAPITI_ENDPOINT_IP: "172.20.0.5"
     depends_on:
       db:
         condition: service_healthy
@@ -75,8 +90,26 @@ services:
         condition: service_healthy
     volumes:
       - pentest-reports:/reports
+      - exploits-data:/usr/share/exploits
     networks: [default, lab]
     tty: true
+
+  wapiti-endpoint:
+    build:
+      context: ./wapiti-endpoint
+    restart: unless-stopped
+    networks:
+      default: {}
+      lab:
+        ipv4_address: 172.20.0.5
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --url http://wapiti-endpoint:80 --metrics 0.0.0.0:2000
+    depends_on:
+      - wapiti-endpoint
+    networks: [default]
 
   blackarch-mcp:
     build:
@@ -306,3 +339,4 @@ volumes:
   pentest-reports:
   pentest-db-data:
   blackarch-mcp-state:
+  exploits-data:

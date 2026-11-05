@@ -15,13 +15,6 @@ RUN pacman -Syu --noconfirm --needed --disable-sandbox \
     gitleaks sqlmap sploitctl \
     metasploit nmap hydra
 
-# sploitctl -f 0 : toutes les sources (exploit-db, m00-exploits, lsd-pl, packetstorm depuis 1999),
-# décomprimées puis les archives compressées supprimées (-X -R). Couverture maximale choisie
-# volontairement malgré la taille/durée de build que ça ajoute (packetstorm à lui seul compte des
-# dizaines d'archives). Résultat sous /usr/share/exploits (défaut), interrogé par
-# pentest.step_sploitctl_lookup() via `sploitctl -s <regex>`.
-RUN sploitctl -f 0 -XR
-
 # nuclei : binaire épinglé (version + sha256 vérifiés), templates communautaires téléchargés au
 # build dans /opt/nuclei-templates. Ne pas ajouter -duc ici : il désactive aussi la mise à jour
 # des templates. Les templates sont référencés par chemin absolu dans pentest.py.
@@ -94,4 +87,7 @@ COPY scripts/db_insert.py scripts/ioc_extract.py pentest.py tasks.py /src/
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["sh", "-c", "celery -A tasks worker --concurrency=${SCAN_WORKERS:-3} --loglevel=info"]
+COPY scripts/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+CMD ["/entrypoint.sh"]
