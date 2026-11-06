@@ -125,29 +125,53 @@ STEP_DEPENDENCIES = {
 }
 
 
+def _build_branch(start, remaining, handled, sig):
+    """Construit récursivement la branche Celery pour `start` en suivant STEP_DEPENDENCIES.
+    Une chaîne linéaire (un seul enfant à chaque niveau) produit chain(A, B, C, ...).
+    Un fork (plusieurs enfants) termine la chaîne par group(c1, c2, ...).
+    Retourne la signature Celery correspondante et met à jour `handled`."""
+    chain_sigs = [sig(start)]
+    handled.add(start)
+    current_children = [c for c in STEP_DEPENDENCIES.get(start, ()) if c in remaining and c not in handled]
+    while len(current_children) == 1:
+        child = current_children[0]
+        chain_sigs.append(sig(child))
+        handled.add(child)
+        current_children = [c for c in STEP_DEPENDENCIES.get(child, ()) if c in remaining and c not in handled]
+    if current_children:
+        # Fork : plusieurs enfants à exécuter en parallèle après la chaîne linéaire.
+        handled.update(current_children)
+        return chain(*chain_sigs, group(*(sig(c) for c in current_children)))
+    return chain_sigs[0] if len(chain_sigs) == 1 else chain(*chain_sigs)
+
+
 def _schedule_for(scan_id, domain, step_ids, tail):
     """Signature Celery pour step_ids (restants à exécuter) : un group() parallèle, sauf les
-    couples de STEP_DEPENDENCIES, gardés en chain(parent, group(enfants présents)) à l'intérieur
-    du group principal -- si le parent n'est pas dans step_ids (déjà OK, cas d'un resume après
-    coup), ses enfants déjà débloqués rejoignent le group principal comme n'importe quelle autre
-    étape indépendante. tail (finalize_scan ou recompute_counts) ne se lance qu'une fois tout le
-    group terminé (chord), quel que soit le statut individuel de chaque étape (un échec d'outil
-    est un retour normal de run_step_task, pas une exception -- voir pentest.execute_step)."""
-    remaining = list(step_ids)
+    étapes liées par STEP_DEPENDENCIES, planifiées en chaîne (ou chaîne+group pour un fork).
+    Les dépendances transitives (wpscan -> wp_bruteforce -> credential_spray) produisent une
+    chaîne à trois maillons plutôt que deux branches distinctes partageant wp_bruteforce.
+    Si le parent n'est pas dans step_ids (déjà OK, cas d'un resume après coup), ses enfants
+    déjà débloqués rejoignent le group principal comme n'importe quelle autre étape indépendante.
+    tail (finalize_scan ou recompute_counts) ne se lance qu'une fois tout le group terminé
+    (chord), quel que soit le statut individuel de chaque étape (un échec d'outil est un retour
+    normal de run_step_task, pas une exception -- voir pentest.execute_step)."""
+    remaining = set(step_ids)
     sig = lambda step_id: run_step_task.si(scan_id, domain, step_id)  # noqa: E731
     branches, handled = [], set()
-    for parent, children in STEP_DEPENDENCIES.items():
-        present_children = [c for c in children if c in remaining]
-        if parent in remaining and present_children:
-            branches.append(chain(sig(parent), group(*(sig(c) for c in present_children))))
-            handled.update([parent, *present_children])
-        elif parent in remaining:
-            branches.append(sig(parent))
-            handled.add(parent)
-        else:
-            # parent déjà fait (resume) : ses enfants déjà débloqués tournent comme n'importe
-            # quelle autre étape indépendante, ci-dessous.
-            pass
+    # Identifier les étapes qui sont déjà ciblées comme enfants : elles ne doivent pas lancer
+    # leur propre branche de dépendance (elles seront incluses par leur parent).
+    dep_children = {c for children in STEP_DEPENDENCIES.values() for c in children}
+    for parent in STEP_DEPENDENCIES:
+        if parent in handled or parent not in remaining:
+            # Déjà traité dans une chaîne, ou déjà fait (resume) : ses enfants présents dans
+            # remaining rejoindront le group principal comme étapes indépendantes ci-dessous.
+            continue
+        if parent in dep_children:
+            # Ce parent est lui-même enfant d'un autre parent encore présent : il sera inclus
+            # dans la chaîne de ce parent, ne pas créer de branche supplémentaire ici.
+            if any(parent in STEP_DEPENDENCIES.get(p, ()) and p in remaining for p in STEP_DEPENDENCIES):
+                continue
+        branches.append(_build_branch(parent, remaining, handled, sig))
     branches += [sig(step_id) for step_id in remaining if step_id not in handled]
     return chord(group(*branches), tail.si(scan_id)).on_error(fail_scan.s(scan_id))
 

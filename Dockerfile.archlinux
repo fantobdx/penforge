@@ -13,7 +13,7 @@ RUN pacman -Syu --noconfirm --needed --disable-sandbox \
     sslscan wfuzz dirbuster metagoofil tor proxychains-ng \
     python base-devel postgresql-libs python-legacy-cgi unzip \
     gitleaks sqlmap sploitctl \
-    metasploit nmap hydra
+    metasploit nmap hydra seclists
 
 # nuclei : binaire épinglé (version + sha256 vérifiés), templates communautaires téléchargés au
 # build dans /opt/nuclei-templates. Ne pas ajouter -duc ici : il désactive aussi la mise à jour

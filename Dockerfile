@@ -15,7 +15,7 @@ RUN echo > /etc/apt/sources.list;\
     echo "deb-src https://parrot.mirror.garr.it/parrot echo main contrib non-free non-free-firmware" > /etc/apt/sources.list.d/parrot1.list;\
     wget -qO - https://archive.parrotsec.org/parrot/misc/parrotsec.gpg | apt-key add -;\
     apt-get update;\
-    apt-get -y --no-install-recommends install -y traceroute dirbuster dirb nikto websploit libwww-perl wfuzz whois metagoofil theharvester wafw00f wpscan sslscan whatweb joomscan git apt-transport-https dirmngr gnupg apt-utils ca-certificates curl build-essential libpq-dev python3-pkg-resources python3-setuptools openssl python-is-python3 libjson-perl libxml-writer-perl tor proxychains4 && echo "resolvconf resolvconf/linkify-resolvconf boolean false" | debconf-set-selections;
+    apt-get -y --no-install-recommends install -y traceroute dirbuster dirb nikto websploit libwww-perl wfuzz whois metagoofil theharvester wafw00f wpscan sslscan whatweb joomscan seclists git apt-transport-https dirmngr gnupg apt-utils ca-certificates curl build-essential libpq-dev python3-pkg-resources python3-setuptools openssl python-is-python3 libjson-perl libxml-writer-perl tor proxychains4 && echo "resolvconf resolvconf/linkify-resolvconf boolean false" | debconf-set-selections;
 
 RUN sed -i 's/^socks4.*/socks5 127.0.0.1 9050/' /etc/proxychains4.conf
 

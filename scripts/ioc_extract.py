@@ -81,10 +81,13 @@ def write_report(scan_dir):
     for root, _dirs, files in os.walk(scan_dir):
         for name in files:
             path = os.path.join(root, name)
-            if name in (REPORT_NAME, YARA_NAME) or os.path.getsize(path) > MAX_REPORT_BYTES:
+            try:
+                if name in (REPORT_NAME, YARA_NAME) or os.path.getsize(path) > MAX_REPORT_BYTES:
+                    continue
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    found = extract_iocs(fh.read())
+            except OSError:
                 continue
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                found = extract_iocs(fh.read())
             for key in iocs:
                 iocs[key] |= found[key]
 
