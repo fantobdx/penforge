@@ -10,4 +10,6 @@ else
     echo "[entrypoint] Bases d'exploits déjà présentes dans $EXPLOITS_DIR."
 fi
 
+cd /opt/blackarch-mcp && python3 -m blackarch_mcp.server --host 0.0.0.0 --port 8765 >> /tmp/blackarch-mcp.log 2>&1 &
+
 exec celery -A tasks worker --concurrency="${SCAN_WORKERS:-3}" --loglevel=info

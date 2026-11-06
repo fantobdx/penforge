@@ -83,14 +83,18 @@ services:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/1
       WAPITI_ENDPOINT_IP: "172.20.0.5"
+      BLACKARCH_MCP_STATE_DIR: /var/lib/blackarch-mcp
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8765:8765"
     volumes:
       - pentest-reports:/reports
       - exploits-data:/usr/share/exploits
+      - blackarch-mcp-state:/var/lib/blackarch-mcp
     networks: [default, lab]
     tty: true
 
@@ -110,24 +114,6 @@ services:
     depends_on:
       - wapiti-endpoint
     networks: [default]
-
-  blackarch-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.archlinux
-    restart: unless-stopped
-    working_dir: /opt/blackarch-mcp
-    command: ["python3", "-m", "blackarch_mcp.server", "--host", "0.0.0.0", "--port", "8765"]
-    environment:
-      BLACKARCH_MCP_STATE_DIR: /var/lib/blackarch-mcp
-      TZ: Europe/Paris
-    ports:
-      # Loopback uniquement : request_tool_run() exécute de vrais outils BlackArch
-      # dès approbation, sans authentification applicative autre que l'approval-gating.
-      - "127.0.0.1:8765:8765"
-    volumes:
-      - blackarch-mcp-state:/var/lib/blackarch-mcp
-    networks: [default, lab]
 
   pentest-mcp:
     build:
