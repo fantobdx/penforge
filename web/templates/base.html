@@ -1,35 +1,170 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="auto">
 <head>
   <meta charset="utf-8">
   <title>{% block title %}Pentest reports{% endblock %}</title>
   <style>
-    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem auto; max-width: 960px; color: #1a1a1a; background: #fafafa; }
-    a { color: #1a5fb4; text-decoration: none; }
+    :root {
+      --bg: #fafafa;
+      --bg2: #fff;
+      --surface: #eee;
+      --border: #ddd;
+      --text: #1a1a1a;
+      --text-muted: #555;
+      --link: #1a5fb4;
+      --btn-bg: #1a5fb4;
+      --btn-color: #fff;
+      --danger-bg: #fdecea;
+      --danger-color: #b02a37;
+      --danger-border: #b02a37;
+      --ok-bg: #e6f4ea; --ok-color: #1e7e34;
+      --fail-bg: #fdecea; --fail-color: #b02a37;
+      --skip-bg: #f1f1f1; --skip-color: #666;
+      --running-bg: #e8f0fe; --running-color: #1a5fb4;
+      --stopped-bg: #fff4e5; --stopped-color: #a66300;
+      --note-color: #806b00;
+      --log-bg: #111; --log-color: #ddd;
+      --toggle-label: "Thème sombre";
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0f1117;
+        --bg2: #1a1d27;
+        --surface: #22263a;
+        --border: #2e3350;
+        --text: #e2e8f0;
+        --text-muted: #8892a4;
+        --link: #60a5fa;
+        --btn-bg: #2563eb;
+        --btn-color: #fff;
+        --danger-bg: #2d1a1a;
+        --danger-color: #f87171;
+        --danger-border: #f87171;
+        --ok-bg: #0d2318; --ok-color: #4ade80;
+        --fail-bg: #2d1a1a; --fail-color: #f87171;
+        --skip-bg: #1e2130; --skip-color: #8892a4;
+        --running-bg: #0d1a3a; --running-color: #60a5fa;
+        --stopped-bg: #2a1f0d; --stopped-color: #fbbf24;
+        --note-color: #fbbf24;
+        --log-bg: #090b10; --log-color: #a8b8d0;
+        --toggle-label: "Thème clair";
+      }
+    }
+
+    :root[data-theme="dark"] {
+      --bg: #0f1117;
+      --bg2: #1a1d27;
+      --surface: #22263a;
+      --border: #2e3350;
+      --text: #e2e8f0;
+      --text-muted: #8892a4;
+      --link: #60a5fa;
+      --btn-bg: #2563eb;
+      --btn-color: #fff;
+      --danger-bg: #2d1a1a;
+      --danger-color: #f87171;
+      --danger-border: #f87171;
+      --ok-bg: #0d2318; --ok-color: #4ade80;
+      --fail-bg: #2d1a1a; --fail-color: #f87171;
+      --skip-bg: #1e2130; --skip-color: #8892a4;
+      --running-bg: #0d1a3a; --running-color: #60a5fa;
+      --stopped-bg: #2a1f0d; --stopped-color: #fbbf24;
+      --note-color: #fbbf24;
+      --log-bg: #090b10; --log-color: #a8b8d0;
+    }
+
+    :root[data-theme="light"] {
+      --bg: #fafafa; --bg2: #fff; --surface: #eee; --border: #ddd;
+      --text: #1a1a1a; --text-muted: #555; --link: #1a5fb4;
+      --btn-bg: #1a5fb4; --btn-color: #fff;
+      --danger-bg: #fdecea; --danger-color: #b02a37; --danger-border: #b02a37;
+      --ok-bg: #e6f4ea; --ok-color: #1e7e34;
+      --fail-bg: #fdecea; --fail-color: #b02a37;
+      --skip-bg: #f1f1f1; --skip-color: #666;
+      --running-bg: #e8f0fe; --running-color: #1a5fb4;
+      --stopped-bg: #fff4e5; --stopped-color: #a66300;
+      --note-color: #806b00;
+      --log-bg: #111; --log-color: #ddd;
+    }
+
+    body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem auto; max-width: 960px; color: var(--text); background: var(--bg); }
+    a { color: var(--link); text-decoration: none; }
     a:hover { text-decoration: underline; }
     table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; }
-    th { background: #eee; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    th { background: var(--surface); }
     .status { font-weight: 600; padding: 0.1rem 0.5rem; border-radius: 3px; font-size: 0.85em; }
-    .status-OK { background: #e6f4ea; color: #1e7e34; }
-    .status-FAIL { background: #fdecea; color: #b02a37; }
-    .status-SKIP { background: #f1f1f1; color: #666; }
-    .status-RUNNING { background: #e8f0fe; color: #1a5fb4; }
-    .status-STOPPED { background: #fff4e5; color: #a66300; }
-    .note { color: #806b00; font-size: 0.9em; }
-    pre { background: #fff; border: 1px solid #ddd; padding: 1rem; overflow-x: auto; white-space: pre-wrap; }
-    nav { margin-bottom: 1.5rem; }
+    .status-OK      { background: var(--ok-bg);      color: var(--ok-color); }
+    .status-FAIL    { background: var(--fail-bg);    color: var(--fail-color); }
+    .status-SKIP    { background: var(--skip-bg);    color: var(--skip-color); }
+    .status-RUNNING { background: var(--running-bg); color: var(--running-color); }
+    .status-STOPPED { background: var(--stopped-bg); color: var(--stopped-color); }
+    .note { color: var(--note-color); font-size: 0.9em; }
+    pre { background: var(--bg2); border: 1px solid var(--border); padding: 1rem; overflow-x: auto; white-space: pre-wrap; color: var(--text); }
+    nav { margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+    nav a { margin-right: 0.1rem; }
+    nav .sep { color: var(--text-muted); margin: 0 0.4rem; }
     form { margin: 0; }
-    button.danger { background: #fdecea; color: #b02a37; border: 1px solid #b02a37; border-radius: 3px; padding: 0.2rem 0.6rem; cursor: pointer; }
-    button.danger:hover { background: #b02a37; color: #fff; }
-    button { background: #1a5fb4; color: #fff; border: 0; border-radius: 3px; padding: 0.4rem 1rem; cursor: pointer; }
-    textarea { width: 100%; min-height: 12rem; font-family: monospace; box-sizing: border-box; }
-    .error { color: #b02a37; }
-    #log { background: #111; color: #ddd; padding: 1rem; height: 70vh; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; }
+    button.danger { background: var(--danger-bg); color: var(--danger-color); border: 1px solid var(--danger-border); border-radius: 3px; padding: 0.2rem 0.6rem; cursor: pointer; }
+    button.danger:hover { background: var(--danger-color); color: #fff; }
+    button { background: var(--btn-bg); color: var(--btn-color); border: 0; border-radius: 3px; padding: 0.4rem 1rem; cursor: pointer; }
+    textarea { width: 100%; min-height: 12rem; font-family: monospace; box-sizing: border-box; background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 0.5rem; }
+    .error { color: var(--danger-color); }
+    #log { background: var(--log-bg); color: var(--log-color); padding: 1rem; height: 70vh; overflow-y: auto; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; }
+    input, select { background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 3px; padding: 0.3rem 0.5rem; }
+
+    #theme-toggle {
+      margin-left: auto;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      border-radius: 3px;
+      padding: 0.2rem 0.6rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #theme-toggle:hover { border-color: var(--link); color: var(--link); }
   </style>
 </head>
 <body>
-  <nav><a href="/">Liste des scans</a> &middot; <a href="/jobs/new">Nouveau scan</a> &middot; <a href="/stats">Mesure Postgres</a> &middot; <a href="/queues">Files d'attente</a></nav>
+  <nav>
+    <a href="/">Liste des scans</a><span class="sep">&middot;</span>
+    <a href="/jobs/new">Nouveau scan</a><span class="sep">&middot;</span>
+    <a href="/system">Système</a><span class="sep">&middot;</span>
+    <a href="/queues">Files d'attente</a><span class="sep">&middot;</span>
+    <a href="/stats">Mesure Postgres</a>
+    <button id="theme-toggle" type="button">◑ Thème</button>
+  </nav>
   {% block content %}{% endblock %}
+  <script>
+    (function () {
+      const root = document.documentElement;
+      const btn = document.getElementById('theme-toggle');
+      const stored = localStorage.getItem('theme');
+      if (stored === 'dark' || stored === 'light') root.setAttribute('data-theme', stored);
+
+      function effective() {
+        const t = root.getAttribute('data-theme');
+        if (t === 'dark') return 'dark';
+        if (t === 'light') return 'light';
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+
+      function updateLabel() {
+        btn.textContent = effective() === 'dark' ? '☀ Clair' : '◑ Sombre';
+      }
+
+      btn.addEventListener('click', function () {
+        const next = effective() === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem('theme', next);
+        updateLabel();
+      });
+
+      updateLabel();
+    })();
+  </script>
 </body>
 </html>

@@ -173,6 +173,8 @@ services:
     volumes:
       - pentest-reports:/reports:ro
       - ./certs:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys/fs/cgroup:/host/cgroup:ro
 
   # ── Lab vulnérable (profile : lab) ────────────────────────────────────────
   # Démarrage : docker compose --profile lab up -d

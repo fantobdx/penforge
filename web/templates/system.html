@@ -1,0 +1,275 @@
+{% extends "base.html" %}
+{% block title %}Système - Pentest reports{% endblock %}
+{% block content %}
+<style>
+  .disk-outer { background: var(--surface); border-radius: 3px; height: 1.1rem; width: 100%; margin: 0.5rem 0 0.25rem; }
+  .disk-inner { height: 100%; border-radius: 3px; width: 0; transition: width 0.4s, background 0.4s; background: #1e7e34; }
+  .disk-label { font-size: 0.9em; color: var(--text-muted); }
+  .conn-bar { display: flex; align-items: center; gap: 1rem; margin: 0.75rem 0 0.5rem; flex-wrap: wrap; }
+  .conn-bar input { flex: 1; min-width: 200px; max-width: 360px; }
+  .conn-count { font-size: 0.85em; color: var(--text-muted); }
+  #conn-table td { font-family: monospace; font-size: 0.82em; }
+  #conn-table td:first-child { font-family: inherit; font-size: 0.85em; }
+</style>
+<h1>Système</h1>
+<p>Métriques Docker et volume /reports. Relevé toutes les 5 s, historique sur 1 h.</p>
+<h2>CPU par conteneur (%)</h2>
+<canvas id="cpu-chart" height="120"></canvas>
+<h2>Mémoire par conteneur (Mo)</h2>
+<canvas id="mem-chart" height="120"></canvas>
+<h2>I/O disque — total (Ko/s)</h2>
+<canvas id="diskio-chart" height="80"></canvas>
+<h2>Réseau — total (Ko/s)</h2>
+<canvas id="net-chart" height="80"></canvas>
+<h2>Volume reports</h2>
+<div class="disk-outer"><div class="disk-inner" id="disk-bar"></div></div>
+<p class="disk-label"><span id="disk-used">-</span> Go utilisés / <span id="disk-total">-</span> Go total (<span id="disk-pct">-</span> %)</p>
+<h2>Processus — conteneurs</h2>
+<div class="conn-bar">
+  <input type="search" id="proc-filter" placeholder="Filtrer conteneur, processus, user…">
+  <span class="conn-count" id="proc-count"></span>
+</div>
+<table id="proc-table">
+  <thead><tr><th>Conteneur</th><th>PID</th><th>PPID</th><th>User</th><th style="text-align:right">RSS Mo</th><th>Commande</th></tr></thead>
+  <tbody id="proc-body"></tbody>
+</table>
+
+<h2>Connexions TCP — conteneurs</h2>
+<div class="conn-bar">
+  <input type="search" id="conn-filter" placeholder="Filtrer conteneur, IP, port, processus…">
+  <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9em;cursor:pointer">
+    <input type="checkbox" id="conn-listen"> LISTEN
+  </label>
+  <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.9em;cursor:pointer">
+    <input type="checkbox" id="conn-local" checked> loopback
+  </label>
+  <span class="conn-count" id="conn-count"></span>
+</div>
+<table id="conn-table">
+  <thead><tr><th>Conteneur</th><th>État</th><th>Local</th><th>Distant</th><th>Processus</th></tr></thead>
+  <tbody id="conn-body"></tbody>
+</table>
+<p class="error" id="status"></p>
+<script src="/static/chart.umd.min.js"></script>
+<script>
+  const METRICS_URL = "/system/metrics";
+  const POLL_MS = 5000;
+  const WINDOW = 720;
+  let lastT = 0;
+  const labels = [];
+  const PALETTE = ["#1a5fb4", "#1e7e34", "#a66300", "#b02a37", "#6c3483", "#167a7a", "#7a4a1a", "#444"];
+  const containerColors = {};
+  let colorIdx = 0;
+  const cpuSeries = {};
+  const memSeries = {};
+  const ioSeries = { disk_r: [], disk_w: [], net_rx: [], net_tx: [] };
+
+  function getColor(name) {
+    if (!containerColors[name]) containerColors[name] = PALETTE[colorIdx++ % PALETTE.length];
+    return containerColors[name];
+  }
+
+  function shortName(name) {
+    return name.replace(/^(penforge|lab)-/, "").replace(/-\d+$/, "");
+  }
+
+  const baseOptions = {
+    animation: false,
+    responsive: true,
+    interaction: { mode: "index", intersect: false },
+    scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: true } },
+  };
+
+  const cpuChart = new Chart(document.getElementById("cpu-chart"), {
+    type: "line",
+    data: { labels, datasets: [] },
+    options: { ...baseOptions, scales: { ...baseOptions.scales, y: { beginAtZero: true, max: 100, ticks: { callback: v => v + "%" } } } },
+  });
+
+  const memChart = new Chart(document.getElementById("mem-chart"), {
+    type: "line",
+    data: { labels, datasets: [] },
+    options: { ...baseOptions, scales: { ...baseOptions.scales, y: { beginAtZero: true, ticks: { callback: v => v + " Mo" } } } },
+  });
+
+  function kbTick(v) { return v >= 1024 ? (v / 1024).toFixed(1) + " Mo/s" : v + " Ko/s"; }
+
+  const diskioChart = new Chart(document.getElementById("diskio-chart"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Lecture", data: ioSeries.disk_r, borderColor: "#1a5fb4", backgroundColor: "#1a5fb4", pointRadius: 0, tension: 0.2 },
+      { label: "Écriture", data: ioSeries.disk_w, borderColor: "#a66300", backgroundColor: "#a66300", pointRadius: 0, tension: 0.2, borderDash: [5, 3] },
+    ]},
+    options: { ...baseOptions, scales: { ...baseOptions.scales, y: { beginAtZero: true, ticks: { callback: kbTick } } } },
+  });
+
+  const netChart = new Chart(document.getElementById("net-chart"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "RX (entrant)", data: ioSeries.net_rx, borderColor: "#1e7e34", backgroundColor: "#1e7e34", pointRadius: 0, tension: 0.2 },
+      { label: "TX (sortant)", data: ioSeries.net_tx, borderColor: "#b02a37", backgroundColor: "#b02a37", pointRadius: 0, tension: 0.2, borderDash: [5, 3] },
+    ]},
+    options: { ...baseOptions, scales: { ...baseOptions.scales, y: { beginAtZero: true, ticks: { callback: kbTick } } } },
+  });
+
+  function ensureDataset(chart, seriesMap, name) {
+    if (seriesMap[name]) return;
+    const color = getColor(name);
+    const ds = {
+      label: shortName(name),
+      data: new Array(labels.length).fill(null),
+      borderColor: color,
+      backgroundColor: color,
+      pointRadius: 0,
+      tension: 0.2,
+    };
+    seriesMap[name] = ds;
+    chart.data.datasets.push(ds);
+  }
+
+  function appendSamples(samples) {
+    for (const s of samples) {
+      labels.push(new Date(s.t).toLocaleTimeString("fr-FR"));
+      for (const name of Object.keys(s.containers)) {
+        ensureDataset(cpuChart, cpuSeries, name);
+        ensureDataset(memChart, memSeries, name);
+      }
+      for (const name of Object.keys(cpuSeries)) cpuSeries[name].data.push(s.containers[name]?.cpu ?? null);
+      for (const name of Object.keys(memSeries)) memSeries[name].data.push(s.containers[name]?.mem_mb ?? null);
+      ioSeries.disk_r.push(s.disk_r ?? 0);
+      ioSeries.disk_w.push(s.disk_w ?? 0);
+      ioSeries.net_rx.push(s.net_rx ?? 0);
+      ioSeries.net_tx.push(s.net_tx ?? 0);
+      lastT = s.t;
+    }
+    const excess = labels.length - WINDOW;
+    if (excess > 0) {
+      labels.splice(0, excess);
+      for (const ds of Object.values(cpuSeries)) ds.data.splice(0, excess);
+      for (const ds of Object.values(memSeries)) ds.data.splice(0, excess);
+      for (const key of Object.keys(ioSeries)) ioSeries[key].splice(0, excess);
+    }
+    if (samples.length) [cpuChart, memChart, diskioChart, netChart].forEach(c => c.update("none"));
+  }
+
+  function updateDisk(s) {
+    if (!s || !s.total_gb) return;
+    const pct = Math.round(s.used_gb / s.total_gb * 100);
+    document.getElementById("disk-used").textContent = s.used_gb.toFixed(1);
+    document.getElementById("disk-total").textContent = s.total_gb.toFixed(1);
+    document.getElementById("disk-pct").textContent = pct;
+    const bar = document.getElementById("disk-bar");
+    bar.style.width = Math.min(pct, 100) + "%";
+    bar.style.background = pct > 85 ? "#b02a37" : pct > 60 ? "#a66300" : "#1e7e34";
+  }
+
+  async function tick() {
+    try {
+      const r = await fetch(`${METRICS_URL}?since=${lastT}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { samples } = await r.json();
+      appendSamples(samples);
+      if (samples.length) updateDisk(samples[samples.length - 1]);
+      document.getElementById("status").textContent = "";
+    } catch (e) {
+      document.getElementById("status").textContent = "Lecture impossible : " + e.message;
+    }
+  }
+
+  tick();
+  setInterval(tick, POLL_MS);
+
+  // --- Processus par conteneur ---------------------------------------------
+  const PROC_URL = "/system/processes";
+  let allProcs = [];
+
+  async function tickProcs() {
+    try {
+      const r = await fetch(PROC_URL, { cache: "no-store" });
+      if (!r.ok) return;
+      allProcs = (await r.json()).processes || [];
+      renderProcs();
+    } catch (_) {}
+  }
+
+  function renderProcs() {
+    const q = document.getElementById("proc-filter").value.toLowerCase();
+    const filtered = allProcs.filter(p =>
+      !q ||
+      (p.container || "").toLowerCase().includes(q) ||
+      (p.cmd || "").toLowerCase().includes(q) ||
+      (p.user || "").toLowerCase().includes(q) ||
+      String(p.pid).includes(q)
+    );
+    document.getElementById("proc-count").textContent =
+      filtered.length + " processus" + (q ? ` (${allProcs.length} total)` : "");
+    const tbody = document.getElementById("proc-body");
+    tbody.replaceChildren(...filtered.map(p => {
+      const tr = document.createElement("tr");
+      const rss = p.rss ? (p.rss / 1024).toFixed(1) : "0";
+      tr.innerHTML =
+        `<td style="font-size:0.82em;color:var(--text-muted)">${p.container || ""}</td>` +
+        `<td style="font-family:monospace">${p.pid}</td>` +
+        `<td style="font-family:monospace;color:var(--text-muted)">${p.ppid}</td>` +
+        `<td style="font-size:0.85em">${p.user || ""}</td>` +
+        `<td style="text-align:right;font-family:monospace">${rss}</td>` +
+        `<td style="font-family:monospace;font-size:0.82em;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(p.cmd||"").replace(/"/g,"&quot;")}">${p.cmd || ""}</td>`;
+      return tr;
+    }));
+  }
+
+  document.getElementById("proc-filter").addEventListener("input", renderProcs);
+  tickProcs();
+  setInterval(tickProcs, 10000);
+
+  // --- Connexions TCP -------------------------------------------------------
+  const CONN_URL = "/system/connections";
+  const STATE_CLS = {
+    ESTAB: "status-OK", SYN_SENT: "status-RUNNING", SYN_RECV: "status-RUNNING",
+    CLOSE_WAIT: "status-STOPPED", FIN_WAIT1: "status-SKIP", FIN_WAIT2: "status-SKIP",
+    TIME_WAIT: "status-SKIP", LISTEN: "status-RUNNING", CLOSING: "status-FAIL",
+  };
+  let allConns = [];
+
+  async function tickConns() {
+    try {
+      const r = await fetch(CONN_URL, { cache: "no-store" });
+      if (!r.ok) return;
+      allConns = (await r.json()).connections || [];
+      renderConns();
+    } catch (_) {}
+  }
+
+  function renderConns() {
+    const q = document.getElementById("conn-filter").value.toLowerCase();
+    const showListen = document.getElementById("conn-listen").checked;
+    const showLocal  = document.getElementById("conn-local").checked;
+    const filtered = allConns.filter(c => {
+      if (!showListen && c.state === "LISTEN") return false;
+      if (!showLocal && (c.remote.startsWith("127.") || c.remote.startsWith("::1:"))) return false;
+      if (!q) return true;
+      return c.local.includes(q) || c.remote.includes(q) ||
+             c.state.toLowerCase().includes(q) || c.proc.toLowerCase().includes(q) ||
+             (c.container || "").toLowerCase().includes(q);
+    });
+    document.getElementById("conn-count").textContent =
+      filtered.length + " connexion" + (filtered.length !== 1 ? "s" : "");
+    const tbody = document.getElementById("conn-body");
+    tbody.replaceChildren(...filtered.map(c => {
+      const tr = document.createElement("tr");
+      const cls = STATE_CLS[c.state] || "";
+      tr.innerHTML =
+        `<td style="font-size:0.82em;color:var(--text-muted)">${c.container || ""}</td>` +
+        `<td><span class="status ${cls}">${c.state}</span></td>` +
+        `<td>${c.local}</td><td>${c.remote}</td><td>${c.proc}</td>`;
+      return tr;
+    }));
+  }
+
+  document.getElementById("conn-filter").addEventListener("input", renderConns);
+  document.getElementById("conn-listen").addEventListener("change", renderConns);
+  document.getElementById("conn-local").addEventListener("change", renderConns);
+  tickConns();
+  setInterval(tickConns, 2000);
+</script>
+{% endblock %}
