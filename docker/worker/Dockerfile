@@ -68,6 +68,17 @@ RUN uv pip install --no-cache -p /venv playwright
 
 RUN git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists
 
+# WhatWeb bundle install : nécessite gcc (json native ext) → fait ici avec base-devel
+# resolv-replace est retiré : sa dépendance resolv-0.8.1 a une ext win32 non buildable sur Linux
+RUN pacman -Syu --noconfirm --needed --disable-sandbox whatweb ruby && \
+    sed -i '/resolv-replace/d' /usr/share/whatweb/Gemfile && \
+    grep -q "getoptlong" /usr/share/whatweb/Gemfile || echo "gem 'getoptlong'" >> /usr/share/whatweb/Gemfile && \
+    gem install --no-user-install getoptlong && \
+    cd /usr/share/whatweb && \
+    rm -f Gemfile.lock && \
+    bundle config set --local without 'mongo rchardet test development' && \
+    bundle install --no-cache
+
 COPY pyproject.toml /src/penforge/
 COPY src/ /src/penforge/src/
 RUN uv pip install --no-cache -p /venv -e /src/penforge
@@ -109,12 +120,11 @@ RUN pacman -Syu --noconfirm --needed --disable-sandbox \
 
 RUN nuclei -ut -ud /opt/nuclei-templates
 
-RUN gem install --no-user-install getoptlong && \
-    cd /usr/share/whatweb && \
-    grep -q "getoptlong" Gemfile || echo "gem 'getoptlong'" >> Gemfile && \
-    rm -f Gemfile.lock && \
-    bundle config set --local without 'mongo rchardet test development' && \
-    bundle install --no-cache
+# Bundle WhatWeb pré-compilé depuis builder (évite de rebuilder des gems natifs sans base-devel)
+COPY --from=builder /usr/share/whatweb/vendor       /usr/share/whatweb/vendor
+COPY --from=builder /usr/share/whatweb/.bundle      /usr/share/whatweb/.bundle
+COPY --from=builder /usr/share/whatweb/Gemfile      /usr/share/whatweb/Gemfile
+COPY --from=builder /usr/share/whatweb/Gemfile.lock /usr/share/whatweb/Gemfile.lock
 
 RUN { \
       printf 'round_robin\nchain_len = 1\nproxy_dns\nremote_dns_subnet 224\ntcp_read_time_out 15000\ntcp_connect_time_out 8000\n[ProxyList]\n'; \
