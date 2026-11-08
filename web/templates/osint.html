@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}OSINT{% endblock %}
+{% block content %}
+<h1>OSINT</h1>
+<p>Investigation passive : username, téléphone, email, image.</p>
+
+{% if error %}
+<p class="error">{{ error }}</p>
+{% endif %}
+
+<style>
+  .osint-tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 1.5rem; }
+  .osint-tab  { padding: 0.5rem 1.2rem; cursor: pointer; border: none; background: none; color: var(--text-muted); font-size: 1rem; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+  .osint-tab:hover  { color: var(--link); }
+  .osint-tab.active { color: var(--link); border-bottom-color: var(--link); font-weight: 600; }
+  .osint-panel { display: none; }
+  .osint-panel.active { display: block; }
+  .osint-panel h2 { margin-top: 0; }
+  .osint-row { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+  .osint-row input[type=text], .osint-row input[type=email], .osint-row input[type=tel] { flex: 1; min-width: 200px; }
+  .upload-area { border: 2px dashed var(--border); border-radius: 6px; padding: 2rem; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+  .upload-area:hover, .upload-area.dragover { border-color: var(--link); }
+  .upload-area input[type=file] { display: none; }
+  .upload-label { color: var(--text-muted); font-size: 0.95rem; }
+  .upload-name  { margin-top: 0.5rem; font-weight: 600; color: var(--link); }
+  .tool-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; background: var(--surface); color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem; }
+</style>
+
+<div class="osint-tabs">
+  <button class="osint-tab {% if not active_tab or active_tab == 'username' %}active{% endif %}" onclick="showTab('username')">Nom d'utilisateur</button>
+  <button class="osint-tab {% if active_tab == 'phone' %}active{% endif %}" onclick="showTab('phone')">Téléphone</button>
+  <button class="osint-tab {% if active_tab == 'email' %}active{% endif %}" onclick="showTab('email')">Email</button>
+  <button class="osint-tab {% if active_tab == 'image' %}active{% endif %}" onclick="showTab('image')">Image</button>
+</div>
+
+<!-- Username -->
+<div id="panel-username" class="osint-panel {% if not active_tab or active_tab == 'username' %}active{% endif %}">
+  <h2>Nom d'utilisateur <span class="tool-badge">Sherlock</span></h2>
+  <p class="note">Recherche le nom d'utilisateur sur 400+ plateformes (GitHub, Twitter, Instagram, Reddit, TikTok…)</p>
+  <form method="post" action="/osint/submit">
+    <input type="hidden" name="target_type" value="username">
+    <div class="osint-row">
+      <input type="text" name="target" placeholder="johndoe" required maxlength="100" pattern="[a-zA-Z0-9._\-]+" title="Alphanumérique, . _ - uniquement">
+      <button type="submit">Investiguer</button>
+    </div>
+  </form>
+</div>
+
+<!-- Phone -->
+<div id="panel-phone" class="osint-panel {% if active_tab == 'phone' %}active{% endif %}">
+  <h2>Téléphone <span class="tool-badge">PhoneInfoga</span></h2>
+  <p class="note">Analyse le carrier, le type de ligne et les expositions publiques du numéro. Format recommandé : <code>+33612345678</code> (international E.164).</p>
+  <form method="post" action="/osint/submit">
+    <input type="hidden" name="target_type" value="phone">
+    <div class="osint-row">
+      <input type="tel" name="target" placeholder="+33612345678" required maxlength="30">
+      <button type="submit">Analyser</button>
+    </div>
+  </form>
+</div>
+
+<!-- Email -->
+<div id="panel-email" class="osint-panel {% if active_tab == 'email' %}active{% endif %}">
+  <h2>Email <span class="tool-badge">Holehe</span></h2>
+  <p class="note">Vérifie si l'adresse email est enregistrée sur 120+ services (réseaux sociaux, SaaS, forums…) sans envoyer de message.</p>
+  <form method="post" action="/osint/submit">
+    <input type="hidden" name="target_type" value="email">
+    <div class="osint-row">
+      <input type="email" name="target" placeholder="cible@example.com" required maxlength="254">
+      <button type="submit">Vérifier</button>
+    </div>
+  </form>
+</div>
+
+<!-- Image -->
+<div id="panel-image" class="osint-panel {% if active_tab == 'image' %}active{% endif %}">
+  <h2>Image <span class="tool-badge">ExifTool</span></h2>
+  <p class="note">EXIF, forensique IA et recherche d'image inversée. Plusieurs images acceptées. Formats : JPG, PNG, TIFF, WEBP, HEIC, RAW (CR2, NEF, ARW…)</p>
+  <form method="post" action="/osint/submit" enctype="multipart/form-data">
+    <input type="hidden" name="target_type" value="image">
+    <div class="upload-area" id="upload-area" onclick="document.getElementById('image-input').click()">
+      <input type="file" id="image-input" name="image" accept="image/*,.heic,.heif,.raw,.cr2,.nef,.arw" multiple onchange="showFilename(this)">
+      <div class="upload-label">Cliquer pour sélectionner une ou plusieurs images<br><small>ou glisser-déposer ici</small></div>
+      <div class="upload-name" id="upload-name"></div>
+    </div>
+    <p><button type="submit" id="image-submit">Analyser</button></p>
+  </form>
+</div>
+
+<script>
+  var _activeTab = "{{ active_tab or 'username' }}";
+
+  function showTab(name) {
+    document.querySelectorAll('.osint-tab').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.osint-panel').forEach(function(p) { p.classList.remove('active'); });
+    var btn = document.querySelector('[onclick="showTab(\'' + name + '\')"]');
+    if (btn) btn.classList.add('active');
+    var panel = document.getElementById('panel-' + name);
+    if (panel) panel.classList.add('active');
+    _activeTab = name;
+  }
+
+  function showFilename(input) {
+    var el = document.getElementById('upload-name');
+    var btn = document.getElementById('image-submit');
+    if (!input.files.length) {
+      el.textContent = '';
+      if (btn) btn.textContent = 'Analyser';
+    } else if (input.files.length === 1) {
+      el.textContent = input.files[0].name;
+      if (btn) btn.textContent = 'Analyser';
+    } else {
+      el.textContent = input.files.length + ' images sélectionnées';
+      if (btn) btn.textContent = 'Analyser ' + input.files.length + ' images';
+    }
+  }
+
+  // Drag and drop
+  var area = document.getElementById('upload-area');
+  if (area) {
+    area.addEventListener('dragover', function(e) { e.preventDefault(); area.classList.add('dragover'); });
+    area.addEventListener('dragleave', function() { area.classList.remove('dragover'); });
+    area.addEventListener('drop', function(e) {
+      e.preventDefault();
+      area.classList.remove('dragover');
+      var input = document.getElementById('image-input');
+      input.files = e.dataTransfer.files;
+      showFilename(input);
+      showTab('image');
+    });
+  }
+</script>
+{% endblock %}

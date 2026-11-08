@@ -1,0 +1,1 @@
+OSINT_ROOT = "/osint"
