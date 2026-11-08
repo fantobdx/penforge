@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "penforge"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "celery[redis]>=5.6.3",
+    "psycopg2-binary",
+    "flask",
+    "gunicorn",
+    "click",
+    "docker",
+    "redis",
+    "mcp<2",
+    "httpx",
+    "markupsafe",
+    "stamina",
+]
+
+[project.scripts]
+penforge = "penforge.cli.main:cli"
+penforge-worker = "penforge.worker.app:start_worker"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/penforge"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"src/penforge/web/templates" = "penforge/web/templates"

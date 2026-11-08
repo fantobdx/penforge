@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Résultat OSINT{% endblock %}
+{% block content %}
+<h1>Résultat OSINT</h1>
+
+<style>
+  .osint-report { font-family: monospace; font-size: 0.9rem; white-space: pre-wrap; word-break: break-all;
+                  background: var(--surface); border: 1px solid var(--border); border-radius: 4px;
+                  padding: 1rem; overflow-x: auto; }
+  .osint-report a { color: var(--link); text-decoration: underline; }
+  .osint-report a:hover { opacity: 0.8; }
+  details { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 1rem; }
+  details summary { padding: 0.6rem 1rem; cursor: pointer; font-weight: 600; list-style: none;
+                    display: flex; align-items: center; gap: 0.6rem; background: var(--surface); border-radius: 4px; }
+  details summary::-webkit-details-marker { display: none; }
+  details[open] summary { border-bottom: 1px solid var(--border); border-radius: 4px 4px 0 0; }
+  details[open] .osint-report { border: none; border-radius: 0 0 4px 4px; }
+</style>
+
+{% if batch is defined %}
+  {# ── Mode batch : plusieurs images ─────────────────────────────────────── #}
+  {% if not all_done %}
+    <meta http-equiv="refresh" content="3">
+    <p><span class="status status-RUNNING">En cours</span> Analyse en cours, actualisation dans 3 secondes…</p>
+  {% else %}
+    <p><span class="status status-OK">Terminé</span> <a href="/osint">Nouvelle recherche</a></p>
+  {% endif %}
+
+  {% for item in batch %}
+  <details open>
+    <summary>
+      {{ item.name }}
+      {% if item.state == "SUCCESS" %}<span class="status status-OK">OK</span>
+      {% elif item.state == "FAILURE" %}<span class="status status-FAIL">Erreur</span>
+      {% else %}<span class="status status-RUNNING">En cours</span>{% endif %}
+    </summary>
+    {% if item.output %}
+      <div class="osint-report">{{ item.output | linkify }}</div>
+    {% elif item.error %}
+      <div class="osint-report error">{{ item.error }}</div>
+    {% else %}
+      <p style="padding: 0.8rem 1rem; margin: 0;" class="note">En attente…</p>
+    {% endif %}
+  </details>
+  {% endfor %}
+
+{% else %}
+  {# ── Mode single : username / phone / email / image seule ──────────────── #}
+  {% if state == "PENDING" or state == "STARTED" %}
+    <meta http-equiv="refresh" content="3">
+    <p><span class="status status-RUNNING">En cours</span> Analyse en cours, actualisation dans 3 secondes…</p>
+  {% elif state == "SUCCESS" %}
+    <p><span class="status status-OK">Terminé</span> <a href="/osint">Nouvelle recherche</a></p>
+    {% if output %}
+      <div class="osint-report">{{ output | linkify }}</div>
+    {% else %}
+      <p class="note">Aucun résultat retourné.</p>
+    {% endif %}
+  {% elif state == "FAILURE" %}
+    <p><span class="status status-FAIL">Erreur</span> <a href="/osint">Nouvelle recherche</a></p>
+    {% if error %}
+      <div class="osint-report error">{{ error }}</div>
+    {% endif %}
+  {% else %}
+    <meta http-equiv="refresh" content="3">
+    <p><span class="status status-RUNNING">{{ state }}</span> En attente…</p>
+  {% endif %}
+{% endif %}
+{% endblock %}

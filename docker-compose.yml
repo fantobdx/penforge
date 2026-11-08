@@ -69,7 +69,10 @@ services:
   pentest:
     build:
       context: .
-      dockerfile: Dockerfile.archlinux
+      dockerfile: docker/worker/Dockerfile
+      args:
+        PENTEST_UID: ${PENTEST_UID:-1000}
+        PENTEST_GID: ${PENTEST_GID:-1000}
     restart: unless-stopped
     environment:
       SCAN_WORKERS: ${SCAN_WORKERS:-3}
@@ -95,6 +98,7 @@ services:
       - pentest-reports:/reports
       - exploits-data:/usr/share/exploits
       - blackarch-mcp-state:/var/lib/blackarch-mcp
+      - osint-uploads:/osint
     networks: [default, lab]
     tty: true
 
@@ -118,7 +122,10 @@ services:
   pentest-mcp:
     build:
       context: .
-      dockerfile: pentest-mcp/Dockerfile
+      dockerfile: docker/mcp/Dockerfile
+      args:
+        PENTEST_UID: ${PENTEST_UID:-1000}
+        PENTEST_GID: ${PENTEST_GID:-1000}
     restart: unless-stopped
     environment:
       TZ: Europe/Paris
@@ -149,7 +156,11 @@ services:
   web:
     build:
       context: .
-      dockerfile: web/Dockerfile
+      dockerfile: docker/web/Dockerfile
+      args:
+        PENTEST_UID: ${PENTEST_UID:-1000}
+        PENTEST_GID: ${PENTEST_GID:-1000}
+        DOCKER_GID: ${DOCKER_GID:-999}
     restart: unless-stopped
     environment:
       WEB_USER: ${WEB_USER:-admin}
@@ -172,6 +183,7 @@ services:
       - "8080:8080"
     volumes:
       - pentest-reports:/reports:ro
+      - osint-uploads:/osint
       - ./certs:/certs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /sys/fs/cgroup:/host/cgroup:ro
@@ -328,3 +340,4 @@ volumes:
   pentest-db-data:
   blackarch-mcp-state:
   exploits-data:
+  osint-uploads:
