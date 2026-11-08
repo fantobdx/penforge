@@ -59,7 +59,7 @@ RUN uv pip install --no-cache -p /venv \
     uv pip install --no-cache -p /venv -r /src/XSStrike/requirements.txt; \
     uv pip install --no-cache -p /venv \
         "setuptools==81.0.0" droopescan "cement<3" wapiti3 \
-        "sslyze>=6,<7" "cryptography>=43,<47" "zombie-imp" stamina git-dumper PicImageSearch
+        "sslyze>=6,<7" "cryptography>=43,<47" "zombie-imp" stamina git-dumper PicImageSearch pillow
 
 RUN git clone --depth 1 https://github.com/L0ced/blackarch-mcp.git /opt/blackarch-mcp && \
     uv pip install --no-cache -p /venv "mcp<2"
