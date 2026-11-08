@@ -116,7 +116,7 @@ RUN pacman -Syu --noconfirm --needed --disable-sandbox \
     perl-image-exiftool \
     python-opencv python-numpy python-pillow python-lxml \
     nss nspr alsa-lib at-spi2-core libxcomposite libxdamage \
-    libxfixes libxrandr libgbm libdrm mesa pango cairo libxkbcommon
+    libxfixes libxrandr libdrm mesa pango cairo libxkbcommon
 
 RUN nuclei -ut -ud /opt/nuclei-templates
 
