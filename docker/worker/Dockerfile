@@ -1,26 +1,12 @@
-FROM blackarchlinux/blackarch:latest
+# ─── Stage 1 : binaires Go pré-compilés ──────────────────────────────────────
+FROM alpine:3.21 AS downloader
 
-LABEL maintainer=Fantomas
-
-COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /usr/local/bin/
-
-RUN pacman -Syu --noconfirm --needed --disable-sandbox \
-    git curl openssl ca-certificates traceroute whois \
-    theharvester dirb wafw00f \
-    nikto perl-libwww perl-json perl-xml-writer whatweb wpscan joomscan \
-    sslscan wfuzz dirbuster metagoofil tor proxychains-ng \
-    python base-devel postgresql-libs python-legacy-cgi unzip \
-    gitleaks sqlmap sploitctl \
-    metasploit nmap hydra seclists \
-    perl-image-exiftool \
-    python-opencv python-numpy python-pillow \
-    python-lxml
+RUN apk add --no-cache curl unzip
 
 RUN curl -fsSL -o /tmp/nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_amd64.zip && \
     echo "ea63d4ae232808cd7c6bc00d0142428e231fab59dae01042246097d195835ab6  /tmp/nuclei.zip" | sha256sum -c - && \
     unzip -o /tmp/nuclei.zip nuclei -d /usr/local/bin && \
-    rm /tmp/nuclei.zip && \
-    nuclei -ut -ud /opt/nuclei-templates
+    rm /tmp/nuclei.zip
 
 RUN curl -fsSL -o /tmp/katana.zip https://github.com/projectdiscovery/katana/releases/download/v1.8.0/katana_1.8.0_linux_amd64.zip && \
     echo "cb027ae99d0757061b70c07a15c7a80f62c5a535ab52c4a329f80c4b0a7309d2  /tmp/katana.zip" | sha256sum -c - && \
@@ -44,59 +30,116 @@ RUN curl -fsSL -o /tmp/phoneinfoga.tar.gz \
     tar -xzf /tmp/phoneinfoga.tar.gz -C /usr/local/bin phoneinfoga && \
     rm /tmp/phoneinfoga.tar.gz
 
+
+# ─── Stage 2 : compilation Python + clones git ───────────────────────────────
+FROM blackarchlinux/blackarch AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /usr/local/bin/
+
+# lxml 5.x et pycurl ne compilent pas sur Python 3.14 + GCC 14 sans ce flag
+ENV CFLAGS="-Wno-incompatible-pointer-types"
+
+RUN pacman -Syu --noconfirm --needed --disable-sandbox \
+    python base-devel curl postgresql-libs git unzip \
+    python-lxml python-opencv python-numpy python-pillow python-legacy-cgi
+
+RUN uv venv /venv
+
+RUN uv pip install --no-cache -p /venv pycurl
+
+RUN uv pip install --no-cache -p /venv \
+    argparse netaddr mechanize psycopg2-binary "celery[redis]==5.6.3" sherlock-project holehe; \
+    git clone https://github.com/hahwul/a2sv.git /src/a2sv && \
+    find /src/a2sv -name '*.py' -exec sh -c 'for f; do expand -t 8 "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done' sh {} + && \
+    find /src/a2sv -name '*.py' -exec sed -i 's/^\( *\)print \(.*\)$/\1print(\2)/;s/iteritems()/items()/g;s/urllib2/urllib.request/g;s/from urlparse import/from urllib.parse import/;s/^import Queue$/import queue as Queue/;s/xrange(/range(/g;s/\.encode(.hex.)/.hex()/g;s/ord(recv\[0\])/recv[0]/g;s/ord(strLastMessage\[-7\])/strLastMessage[-7]/g;s/\.communicate()\[0\]/.communicate()[0].decode(errors="replace")/g' {} + && \
+    git clone https://github.com/CyberPrince-hub/XSSZypheron.git /src/XSSZypheron && \
+    git -C /src/XSSZypheron checkout ba4fec89cf9aa133eccb0bf08f0c241e23eb9e5a && \
+    uv pip install --no-cache -p /venv -r /src/XSSZypheron/requirements.txt && \
+    git clone https://github.com/s0md3v/XSStrike.git /src/XSStrike && \
+    uv pip install --no-cache -p /venv -r /src/XSStrike/requirements.txt; \
+    uv pip install --no-cache -p /venv \
+        "setuptools==81.0.0" droopescan "cement<3" wapiti3 \
+        "sslyze>=6,<7" "cryptography>=43,<47" "zombie-imp" stamina git-dumper PicImageSearch
+
+RUN git clone --depth 1 https://github.com/L0ced/blackarch-mcp.git /opt/blackarch-mcp && \
+    uv pip install --no-cache -p /venv "mcp<2"
+
+RUN uv pip install --no-cache -p /venv playwright
+
+RUN git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists
+
+COPY pyproject.toml /src/penforge/
+COPY src/ /src/penforge/src/
+RUN uv pip install --no-cache -p /venv -e /src/penforge
+
+
+# ─── Stage 3 : image finale runtime ──────────────────────────────────────────
+FROM blackarchlinux/blackarch AS runtime
+
+LABEL maintainer=Fantomas
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /usr/local/bin/
+
+COPY --from=downloader /usr/local/bin/nuclei      /usr/local/bin/
+COPY --from=downloader /usr/local/bin/katana      /usr/local/bin/
+COPY --from=downloader /usr/local/bin/trufflehog  /usr/local/bin/
+COPY --from=downloader /usr/local/bin/subfinder   /usr/local/bin/
+COPY --from=downloader /usr/local/bin/phoneinfoga /usr/local/bin/
+
+COPY --from=builder /venv             /venv
+COPY --from=builder /src/a2sv         /src/a2sv
+COPY --from=builder /src/XSSZypheron /src/XSSZypheron
+COPY --from=builder /src/XSStrike    /src/XSStrike
+COPY --from=builder /opt/blackarch-mcp /opt/blackarch-mcp
+COPY --from=builder /src/penforge     /src/penforge
+COPY --from=builder /usr/share/seclists /usr/share/seclists
+
+RUN pacman -Syu --noconfirm --needed --disable-sandbox \
+    git curl openssl ca-certificates traceroute whois \
+    theharvester dirb wafw00f \
+    nikto perl-libwww perl-json perl-xml-writer whatweb wpscan joomscan \
+    sslscan wfuzz dirbuster metagoofil tor proxychains-ng \
+    python postgresql-libs python-legacy-cgi \
+    gitleaks sqlmap sploitctl \
+    metasploit nmap hydra \
+    perl-image-exiftool \
+    python-opencv python-numpy python-pillow python-lxml \
+    nss nspr alsa-lib at-spi2-core libxcomposite libxdamage \
+    libxfixes libxrandr libgbm libdrm mesa pango cairo libxkbcommon
+
+RUN nuclei -ut -ud /opt/nuclei-templates
+
 RUN gem install --no-user-install getoptlong && \
     cd /usr/share/whatweb && \
     grep -q "getoptlong" Gemfile || echo "gem 'getoptlong'" >> Gemfile && \
     rm -f Gemfile.lock && \
     bundle config set --local without 'mongo rchardet test development' && \
-    bundle install --no-cache && \
-    gem install --no-user-install resolv-replace
+    bundle install --no-cache
 
 RUN { \
       printf 'round_robin\nchain_len = 1\nproxy_dns\nremote_dns_subnet 224\ntcp_read_time_out 15000\ntcp_connect_time_out 8000\n[ProxyList]\n'; \
       for port in 9050 9051 9052; do echo "socks5 127.0.0.1 $port"; done; \
     } > /etc/proxychains.conf
 
-RUN mkdir -p /src
+ENV VIRTUAL_ENV=/venv
+ENV PATH="/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 
-WORKDIR /src
-
-RUN uv pip install --system --break-system-packages --no-cache --reinstall-package pycurl pycurl
-
-RUN uv pip install --system --break-system-packages --no-cache argparse netaddr mechanize psycopg2-binary "celery[redis]==5.6.3" sherlock-project holehe; \
-    git clone https://github.com/hahwul/a2sv.git && \
-    find /src/a2sv -name '*.py' -exec sh -c 'for f; do expand -t 8 "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done' sh {} + && \
-    find /src/a2sv -name '*.py' -exec sed -i 's/^\( *\)print \(.*\)$/\1print(\2)/;s/iteritems()/items()/g;s/urllib2/urllib.request/g;s/from urlparse import/from urllib.parse import/;s/^import Queue$/import queue as Queue/;s/xrange(/range(/g;s/\.encode(.hex.)/.hex()/g;s/ord(recv\[0\])/recv[0]/g;s/ord(strLastMessage\[-7\])/strLastMessage[-7]/g;s/\.communicate()\[0\]/.communicate()[0].decode(errors="replace")/g' {} + && \
-    git clone https://github.com/CyberPrince-hub/XSSZypheron.git /src/XSSZypheron && \
-    git -C /src/XSSZypheron checkout ba4fec89cf9aa133eccb0bf08f0c241e23eb9e5a && \
-    uv pip install --system --break-system-packages --no-cache -r /src/XSSZypheron/requirements.txt && \
-    git clone https://github.com/s0md3v/XSStrike.git && uv pip install --system --break-system-packages --no-cache -r /src/XSStrike/requirements.txt; \
-    LXML_VER=$(python3 -c "import lxml; print(lxml.__version__)") && \
-    uv pip install --system --break-system-packages --no-cache "setuptools==81.0.0" droopescan "cement<3" wapiti3 "sslyze>=6,<7" "cryptography>=43,<47" "zombie-imp" stamina git-dumper "lxml==${LXML_VER}" PicImageSearch
+RUN /venv/bin/playwright install chromium
 
 ARG PENTEST_UID=1000
 ARG PENTEST_GID=1000
 RUN groupadd -g ${PENTEST_GID} pentest && \
     useradd -u ${PENTEST_UID} -g ${PENTEST_GID} -M -s /usr/sbin/nologin pentest && \
     mkdir -p /opt/blackarch-mcp && \
-    chown -R pentest:pentest /src /opt/blackarch-mcp /opt/nuclei-templates && \
+    chown -R pentest:pentest /venv /src /opt/blackarch-mcp /opt/nuclei-templates /opt/playwright && \
     mkdir -p /reports /osint /usr/share/exploits /var/lib/blackarch-mcp && \
     chown pentest:pentest /reports /osint /usr/share/exploits /var/lib/blackarch-mcp
 
 COPY --chown=pentest:pentest a2sv-overrides/ /src/a2sv/module/
 
-RUN git clone --depth 1 https://github.com/L0ced/blackarch-mcp.git /opt/blackarch-mcp && \
-    uv pip install --system --break-system-packages --no-cache "mcp<2"
-
-# Installation du package penforge depuis les sources
-COPY --chown=pentest:pentest pyproject.toml /src/
-COPY --chown=pentest:pentest src/ /src/src/
-RUN uv pip install --system --break-system-packages --no-cache -e /src
-
-# Shims de compatibilité (pentest_mcp.py, scripts entrypoint)
 COPY --chown=pentest:pentest scripts/db_insert.py scripts/ioc_extract.py pentest.py tasks.py osint.py /src/
-
-ENV PYTHONUNBUFFERED=1
 
 COPY scripts/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
