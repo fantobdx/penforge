@@ -14,6 +14,8 @@ _OSINT_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", "
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9._\-]{1,100}$")
 _PHONE_RE = re.compile(r"^[\d\s+\-().]{4,30}$")
 
+from penforge.config import DOMAIN_RE as _DOMAIN_RE
+
 
 @bp.route("/osint")
 def osint():
@@ -23,7 +25,7 @@ def osint():
 @bp.route("/osint/submit", methods=["POST"])
 def osint_submit():
     target_type = request.form.get("target_type", "")
-    if target_type not in ("username", "phone", "email", "image"):
+    if target_type not in ("username", "phone", "email", "image", "domain"):
         abort(400)
 
     if target_type == "image":
@@ -59,6 +61,8 @@ def osint_submit():
         return render_template("osint.html", error="Numéro de téléphone invalide.", active_tab=target_type), 400
     if target_type == "email" and "@" not in target:
         return render_template("osint.html", error="Adresse email invalide.", active_tab=target_type), 400
+    if target_type == "domain" and not _DOMAIN_RE.match(target):
+        return render_template("osint.html", error="Nom de domaine invalide.", active_tab=target_type), 400
 
     result = run_osint.delay(target_type, target, uid)
     return redirect(url_for("osint.osint_result", task_id=result.id))

@@ -18,6 +18,9 @@ dependencies = [
     "httpx",
     "markupsafe",
     "stamina",
+    "pygit2",
+    "maigret",
+    "pysaucenao",
 ]
 
 [project.scripts]

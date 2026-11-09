@@ -20,6 +20,7 @@ try:
     from penforge.osint.phone import run_phone as _run_phone
     from penforge.osint.email_lookup import run_email as _run_email
     from penforge.osint.image import run_image as _run_image
+    from penforge.osint.domain import run_domain as _run_domain
     _osint_available = True
 except ImportError:
     _osint_available = False
@@ -30,7 +31,10 @@ _TOR_AVAILABLE = True
 @worker_ready.connect
 def _on_worker_ready(**_kwargs):
     global _TOR_AVAILABLE
-    _db_steps.recover_crashed_steps()
+    try:
+        _db_steps.recover_crashed_steps()
+    except Exception as exc:
+        log_error(f"recover_crashed_steps a échoué (schéma DB manquant ?) : {exc}")
     if not start_tor_pool():
         log_error("Instances Tor non disponibles. Scans pentest désactivés. OSINT opérationnel.")
         _TOR_AVAILABLE = False
@@ -52,7 +56,7 @@ def run_step_task(self, scan_id, domain, step_id):
     if not local:
         port = _db_tor.acquire_tor_port(self.request.id)
         if port is None:
-            raise self.retry(countdown=2, max_retries=config.STEP_TIMEOUT // 2)
+            raise self.retry(countdown=15, max_retries=config.STEP_TIMEOUT // 15)
 
     scan_dir = os.path.join(config.SCANS_ROOT, str(scan_id))
     os.makedirs(scan_dir, exist_ok=True)
@@ -109,6 +113,7 @@ def run_osint(self, target_type, target, uuid):  # noqa: ARG001
         "phone": _run_phone,
         "email": _run_email,
         "image": _run_image,
+        "domain": _run_domain,
     }[target_type]
     output = fn(target, outdir)
     return {"output": output}

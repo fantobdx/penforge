@@ -72,13 +72,10 @@ def _edge_forensics(cv_img):
     import cv2 as _cv2
     edges = _cv2.Canny(cv_img, 100, 200)
     ratio = float(np.sum(edges > 0) / edges.size)
+    # Signal unidirectionnel : densité de contours trop faible → IA probable (lissé)
     if ratio < 0.02:
-        return 0.9
-    if ratio > 0.18:
         return 0.8
-    if ratio > 0.12:
-        return 0.5
-    return 0.2
+    return 0.1
 
 
 def _pil_exif_dump(image_path):
@@ -131,6 +128,23 @@ def _reverse_image_search(image_path):
 
     except ImportError:
         lines.append("  (PicImageSearch absent — reconstruire l'image avec PicImageSearch)")
+
+    try:
+        from pysaucenao import SauceNao as _SauceNao
+        from penforge import config as _cfg
+        kwargs = {"api_key": _cfg.SAUCENAO_API_KEY} if _cfg.SAUCENAO_API_KEY else {}
+        sn = _SauceNao(**kwargs)
+        results = sn.from_file(image_path)
+        lines.append(f"\n  SauceNAO ({len(results)} correspondance(s)) :")
+        for item in results[:_MAX_REVERSE_RESULTS]:
+            title = getattr(item, "title", None) or getattr(item, "author_name", "") or "(sans titre)"
+            urls = getattr(item, "urls", []) or []
+            url_str = urls[0] if urls else ""
+            lines.append(f"    {title}  —  {url_str}")
+    except ImportError:
+        pass
+    except Exception as exc:
+        lines.append(f"  SauceNAO indisponible : {exc}")
 
     return "\n".join(lines)
 

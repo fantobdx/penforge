@@ -54,3 +54,7 @@ WEB_PASSWORD = os.environ.get("WEB_PASSWORD", "")
 
 # Wapiti endpoint
 WAPITI_ENDPOINT_IP = os.environ.get("WAPITI_ENDPOINT_IP", "")
+
+# SauceNAO (optionnel — 200 req/jour avec un compte gratuit)
+SAUCENAO_API_KEY = os.environ.get("SAUCENAO_API_KEY", "")
+
