@@ -12,7 +12,11 @@ app.conf.update(
     worker_prefetch_multiplier=1,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    task_queue_max_priority=10,
+    task_default_priority=5,
 )
+
+app.autodiscover_tasks(["penforge.worker"])
 
 
 def start_worker():

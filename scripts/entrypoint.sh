@@ -19,5 +19,8 @@ fi
 setpriv --reuid=pentest --regid=pentest --init-groups -- \
     env HOME=/home/pentest sh -c 'cd /opt/blackarch-mcp && python3 -m blackarch_mcp.server --host 0.0.0.0 --port 8765 >> /tmp/blackarch-mcp.log 2>&1' &
 
+setpriv --reuid=pentest --regid=pentest --init-groups -- \
+    env HOME=/home/pentest sh -c 'python -m penforge.mcp.server >> /tmp/pentest-mcp.log 2>&1' &
+
 exec setpriv --reuid=pentest --regid=pentest --init-groups -- \
     env HOME=/home/pentest celery -A penforge.worker.app worker --concurrency="${SCAN_WORKERS:-3}" --loglevel=info

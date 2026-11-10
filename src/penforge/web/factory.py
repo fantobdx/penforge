@@ -15,7 +15,12 @@ def create_app():
     if not config.WEB_PASSWORD:
         raise RuntimeError("WEB_PASSWORD requis : l'interface n'est pas démarrée sans authentification.")
 
-    app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), "templates"))
+    _here = os.path.dirname(__file__)
+    app = Flask(
+        __name__,
+        template_folder=os.path.join(_here, "templates"),
+        static_folder=os.path.join(_here, "static"),
+    )
     app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
     @app.template_filter("linkify")

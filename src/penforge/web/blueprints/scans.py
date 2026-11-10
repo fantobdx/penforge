@@ -11,6 +11,7 @@ from flask import (
 
 from penforge import config
 from penforge.db.connection import resolve_report_path
+from penforge.db.scans import PRIORITY_CHOICES, set_scan_priority
 from penforge.pentest.steps import STEP_FUNCS, excludable_steps
 from penforge.worker.scheduler import start_scan, resume_scan, rerun_step
 
@@ -41,27 +42,31 @@ def index():
     with _get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            SELECT j.id, j.domain, j.status, j.scan_id, s.current_step
+            SELECT j.id, j.domain, j.status, j.scan_id, s.current_step, s.priority
             FROM jobs j
             LEFT JOIN scans s ON s.id = j.scan_id
             WHERE j.status IN ('queued', 'running')
-            ORDER BY j.id
+            ORDER BY s.priority ASC, j.id ASC
             """
         )
         jobs = cur.fetchall()
         cur.execute(
             """
-            SELECT id, domain, started_at, finished_at, ok_count, fail_count, skip_count
-            FROM scans ORDER BY started_at DESC
+            SELECT s.id, s.domain, s.started_at, s.finished_at,
+                   s.ok_count, s.fail_count, s.skip_count, s.priority,
+                   (SELECT COUNT(*) FROM findings WHERE scan_id = s.id AND severity = 'critical') AS critical_count,
+                   (SELECT COUNT(*) FROM findings WHERE scan_id = s.id AND severity = 'high')     AS high_count
+            FROM scans s ORDER BY s.started_at DESC
             """
         )
         scans = cur.fetchall()
-    return render_template("index.html", scans=scans, jobs=jobs)
+    return render_template("index.html", scans=scans, jobs=jobs, priority_choices=PRIORITY_CHOICES)
 
 
 @bp.route("/jobs/new")
 def new_job():
-    return render_template("new.html", invalid=[], domains_text="", steps=excludable_steps())
+    return render_template("new.html", invalid=[], domains_text="", steps=excludable_steps(),
+                           priority_choices=PRIORITY_CHOICES)
 
 
 @bp.route("/jobs", methods=["POST"])
@@ -75,13 +80,19 @@ def create_jobs():
     if invalid or not domains:
         return render_template(
             "new.html", invalid=invalid, domains_text=text, no_domain=not domains,
-            steps=excludable_steps(),
+            steps=excludable_steps(), priority_choices=PRIORITY_CHOICES,
         ), 400
 
     valid_step_ids = {step_id for step_id, _ in excludable_steps()}
     excluded_steps = set(request.form.getlist("exclude_steps")) & valid_step_ids
+    try:
+        priority = int(request.form.get("priority", 5))
+    except (TypeError, ValueError):
+        priority = 5
+    if priority not in PRIORITY_CHOICES:
+        priority = 5
     for domain in domains:
-        start_scan(domain, excluded_steps=excluded_steps)
+        start_scan(domain, excluded_steps=excluded_steps, priority=priority)
     return redirect(url_for("scans.index"))
 
 
@@ -105,7 +116,26 @@ def scan_detail(scan_id):
         step["has_file"] = resolve_report_path(step["report_path"]) is not None
         step["rerunnable"] = step["step_id"] in STEP_FUNCS
     resumable = scan["finished_at"] is None and not running
-    return render_template("scan.html", scan=scan, steps=steps, running=running, resumable=resumable)
+    from penforge.db import scans as _db_scans
+    findings = _db_scans.get_findings(scan_id)
+    _SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
+    findings_by_severity = {}
+    for f in findings:
+        findings_by_severity.setdefault(f["severity"], []).append(f)
+    findings_by_severity = {k: findings_by_severity[k] for k in _SEVERITY_ORDER if k in findings_by_severity}
+    return render_template("scan.html", scan=scan, steps=steps, running=running, resumable=resumable,
+                           priority_choices=PRIORITY_CHOICES, findings_by_severity=findings_by_severity)
+
+
+@bp.route("/scan/<int:scan_id>/priority", methods=["POST"])
+def scan_set_priority(scan_id):
+    try:
+        priority = int(request.form.get("priority", 5))
+    except (TypeError, ValueError):
+        abort(400)
+    if not set_scan_priority(scan_id, priority):
+        abort(404 if priority in PRIORITY_CHOICES else 400)
+    return redirect(url_for("scans.scan_detail", scan_id=scan_id))
 
 
 @bp.route("/scan/<int:scan_id>/stop", methods=["POST"])
@@ -146,10 +176,23 @@ def scan_live(scan_id):
     return render_template("live.html", scan=scan)
 
 
+@bp.route("/scan/<int:scan_id>/log_steps")
+def scan_log_steps(scan_id):
+    from flask import jsonify
+    with _get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT step_id FROM scan_logs WHERE scan_id = %s AND step_id IS NOT NULL"
+            " GROUP BY step_id ORDER BY MIN(id)",
+            (scan_id,),
+        )
+        return jsonify({"steps": [r[0] for r in cur.fetchall()]})
+
+
 @bp.route("/scan/<int:scan_id>/logs")
 def scan_logs(scan_id):
     last_id = request.headers.get("Last-Event-ID", "0")
     cursor_id = int(last_id) if last_id.isdigit() else 0
+    step_filter = request.args.get("step") or None
 
     def stream():
         nonlocal cursor_id
@@ -161,10 +204,17 @@ def scan_logs(scan_id):
                     yield "event: end\ndata: scan introuvable\n\n"
                     return
                 finished = state["finished"]
-                cur.execute(
-                    "SELECT id, line FROM scan_logs WHERE scan_id = %s AND id > %s ORDER BY id LIMIT 500",
-                    (scan_id, cursor_id),
-                )
+                if step_filter:
+                    cur.execute(
+                        "SELECT id, line FROM scan_logs"
+                        " WHERE scan_id = %s AND id > %s AND step_id = %s ORDER BY id LIMIT 500",
+                        (scan_id, cursor_id, step_filter),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id, line FROM scan_logs WHERE scan_id = %s AND id > %s ORDER BY id LIMIT 500",
+                        (scan_id, cursor_id),
+                    )
                 rows = cur.fetchall()
             for row in rows:
                 cursor_id = row["id"]

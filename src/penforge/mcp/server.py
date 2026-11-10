@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
-"""Serveur MCP exposant les scans de pentest.py, leurs rapports, et deux actions de contrôle.
+"""Serveur MCP exposant les scans pentest, leurs rapports, et des actions de contrôle.
 
-Ressources et outils de lecture (mêmes fonctions, mêmes noms d'arguments ; outils : list_scans,
-scan_detail, step_report, step_report_file) :
+Ressources et outils de lecture :
   scan://list                                     - liste des scans
-  scan://{scan_id}                                 - détail d'un scan + ses étapes (sans le
-                                                      contenu des rapports)
-  scan://{scan_id}/{step_id}                       - rapport d'une étape : contenu texte s'il
-                                                      est en base (scan_steps.report_content) ou
-                                                      sur disque, listing si c'est un dossier
-                                                      (wapiti/dirbuster), message sinon
-  scan://{scan_id}/{step_id}/file/{encoded_path}   - un fichier (ou sous-dossier) précis d'un
-                                                      rapport-dossier ; encoded_path est le chemin
-                                                      relatif à la racine du rapport, encodé en
-                                                      base64 urlsafe (voir le listing ci-dessus)
+  scan://{scan_id}                                 - détail d'un scan + ses étapes
+  scan://{scan_id}/{step_id}                       - rapport d'une étape
+  scan://{scan_id}/{step_id}/file/{encoded_path}   - fichier précis d'un rapport-dossier
 
-Outils de contrôle (même mécanisme coopératif que web/app.py, PAS mcp.control.revoke) :
+Outils de contrôle :
   excludable_steps  - step_id/label valides pour start_scan(excluded_steps=...)
-  start_scan        - démarre un nouveau scan (tasks.start_scan), avec exclusion d'outils
-  skip_step         - saute une étape RUNNING d'un scan sans l'arrêter (db_insert.request_skip)
-
-⚠️ Ce serveur n'était historiquement que lecture seule ; il accepte maintenant start_scan/
-skip_step (démarrage de vrais outils contre une cible, cf. CLAUDE.md : réservé aux cibles
-autorisées) sans authentification applicative propre (cohérent avec blackarch-mcp, mais
-à la différence de web/app.py qui exige une auth HTTP Basic) : seul le binding réseau (voir
-docker-compose.yml) limite qui peut l'atteindre. Service à part (image dédiée
-pentest-mcp/Dockerfile), même volume /reports (lecture seule) et même connexion Postgres
-(variables PG* standard, voir db_insert.py) que pentest.py/tasks.py/web/app.py ; start_scan
-envoie une tâche au même broker Celery que ces derniers (voir tasks.py), sans jamais exécuter
-d'outil BlackArch/Arch directement dans ce conteneur.
+  start_scan        - démarre un nouveau scan
+  skip_step         - saute une étape RUNNING sans arrêter le scan
+  set_scan_priority - change la priorité d'un scan existant
 """
 
 import base64
@@ -37,16 +20,19 @@ import os
 
 from mcp.server.fastmcp import FastMCP
 
-import db_insert
-import pentest
-import tasks
+from penforge.db.connection import MAX_REPORT_BYTES, _cursor, resolve_report_path
+from penforge.db.scans import PRIORITY_CHOICES, set_scan_priority as _set_scan_priority
+from penforge.db.steps import request_skip as _request_skip
+from penforge.pentest.steps import excludable_steps as _get_excludable_steps
+from penforge.config import DOMAIN_RE
+from penforge.worker.scheduler import start_scan as _scheduler_start_scan
 
-MAX_FILE_BYTES = db_insert.MAX_REPORT_BYTES  # 2 Mo, même limite que pour le contenu stocké en base
+MAX_FILE_BYTES = MAX_REPORT_BYTES  # 2 Mo, même limite que pour le contenu stocké en base
 
 mcp = FastMCP(
     "pentest-reports",
     instructions=(
-        "Scans pentest.py et leurs rapports (lecture), plus deux actions de contrôle : "
+        "Scans pentest et leurs rapports (lecture), plus des actions de contrôle : "
         "start_scan (démarrer un scan, avec exclusion d'outils optionnelle) et skip_step "
         "(sauter une étape RUNNING d'un scan, par step_id, sans l'arrêter -- plusieurs étapes "
         "indépendantes pouvant tourner en parallèle pour un même scan). Toute autre action de "
@@ -77,7 +63,7 @@ def _decode_path(token):
 
 
 def _read_bounded(path):
-    """Contenu texte de path, borné à MAX_FILE_BYTES (comme db_insert._read_report_content)."""
+    """Contenu texte de path, borné à MAX_FILE_BYTES."""
     try:
         if os.path.getsize(path) > MAX_FILE_BYTES:
             return json.dumps({
@@ -92,7 +78,7 @@ def _read_bounded(path):
 
 def _latest_step(scan_id, step_id):
     """Dernier enregistrement (report_path, report_content) de step_id pour ce scan, ou None."""
-    with db_insert._cursor() as cur:
+    with _cursor() as cur:
         cur.execute(
             "SELECT report_path, report_content FROM scan_steps "
             "WHERE scan_id = %s AND step_id = %s ORDER BY id DESC LIMIT 1",
@@ -105,7 +91,7 @@ def _latest_step(scan_id, step_id):
 @mcp.tool()
 def list_scans() -> str:
     """Liste des scans, du plus récent au plus ancien."""
-    with db_insert._cursor() as cur:
+    with _cursor() as cur:
         cur.execute(
             """
             SELECT id, domain, started_at, finished_at, ok_count, fail_count, skip_count, current_step
@@ -119,9 +105,8 @@ def list_scans() -> str:
 @mcp.resource("scan://{scan_id}")
 @mcp.tool()
 def scan_detail(scan_id: str) -> str:
-    """Détail d'un scan et de ses étapes (sans le contenu des rapports : voir
-    scan://{scan_id}/{step_id} pour ça)."""
-    with db_insert._cursor() as cur:
+    """Détail d'un scan et de ses étapes (sans le contenu des rapports)."""
+    with _cursor() as cur:
         cur.execute("SELECT * FROM scans WHERE id = %s", (scan_id,))
         scans = _rows_as_dicts(cur)
         if not scans:
@@ -134,22 +119,21 @@ def scan_detail(scan_id: str) -> str:
         )
         steps = _rows_as_dicts(cur)
     for step in steps:
-        step["has_report"] = db_insert.resolve_report_path(step["report_path"]) is not None
+        step["has_report"] = resolve_report_path(step["report_path"]) is not None
     return json.dumps({"scan": scan, "steps": steps}, default=str, ensure_ascii=False)
 
 
 @mcp.resource("scan://{scan_id}/{step_id}")
 @mcp.tool()
 def step_report(scan_id: str, step_id: str) -> str:
-    """Rapport d'une étape : contenu texte s'il est en base ou sur disque, listing si c'est un
-    dossier (wapiti/dirbuster), message d'indisponibilité sinon."""
+    """Rapport d'une étape : contenu texte s'il est en base ou sur disque, listing si dossier."""
     row = _latest_step(scan_id, step_id)
     if row is None:
         return json.dumps({"error": f"étape {step_id!r} introuvable pour le scan {scan_id}"})
     report_path, report_content = row
     if report_content:
         return report_content
-    real = db_insert.resolve_report_path(report_path)
+    real = resolve_report_path(report_path)
     if real is None:
         return json.dumps({"error": "aucun rapport disponible pour cette étape"})
     if os.path.isdir(real):
@@ -166,16 +150,14 @@ def step_report(scan_id: str, step_id: str) -> str:
 @mcp.resource("scan://{scan_id}/{step_id}/file/{encoded_path}")
 @mcp.tool()
 def step_report_file(scan_id: str, step_id: str, encoded_path: str) -> str:
-    """Un fichier (ou sous-dossier) précis d'un rapport-dossier (wapiti/dirbuster). encoded_path
-    est le chemin relatif à la racine du rapport, encodé en base64 urlsafe (voir le listing
-    retourné par scan://{scan_id}/{step_id} ou par cette même ressource sur un sous-dossier)."""
+    """Fichier précis d'un rapport-dossier. encoded_path est le chemin relatif encodé en base64 urlsafe."""
     rel = _decode_path(encoded_path)
     if rel is None:
         return json.dumps({"error": "encoded_path invalide"})
     row = _latest_step(scan_id, step_id)
     if row is None:
         return json.dumps({"error": f"étape {step_id!r} introuvable pour le scan {scan_id}"})
-    base = db_insert.resolve_report_path(row[0])
+    base = resolve_report_path(row[0])
     if base is None or not os.path.isdir(base):
         return json.dumps({"error": "rapport-dossier introuvable"})
     target = os.path.realpath(os.path.join(base, rel))
@@ -196,10 +178,9 @@ def step_report_file(scan_id: str, step_id: str, encoded_path: str) -> str:
 @mcp.resource("scan://{scan_id}/findings")
 @mcp.tool()
 def scan_findings(scan_id: str) -> str:
-    """Findings automatiques extraits des rapports après chaque étape OK (wpscan, wp_bruteforce,
-    nuclei, nikto, sqlmap, sslscan). Classés par sévérité décroissante : critical → high →
-    medium → low → info. Retourne [] si aucun finding ou si le scan n'existe pas encore."""
-    with db_insert._cursor() as cur:
+    """Findings automatiques extraits des rapports après chaque étape OK.
+    Classés par sévérité décroissante : critical → high → medium → low → info."""
+    with _cursor() as cur:
         cur.execute(
             """
             SELECT step_id, severity, title, detail, recommendation, created_at
@@ -218,35 +199,45 @@ def scan_findings(scan_id: str) -> str:
 
 @mcp.tool()
 def excludable_steps() -> str:
-    """Liste (step_id, label) des outils qu'un scan peut exclure, dans leur ordre d'exécution --
-    à passer dans excluded_steps de start_scan."""
+    """Liste (step_id, label) des outils qu'un scan peut exclure."""
     return json.dumps(
-        [{"step_id": step_id, "label": label} for step_id, label in pentest.excludable_steps()],
+        [{"step_id": step_id, "label": label} for step_id, label in _get_excludable_steps()],
         ensure_ascii=False,
     )
 
 
+_VALID_PRIORITIES = {1, 3, 5, 7, 9}
+_PRIORITY_LABELS = PRIORITY_CHOICES
+
+
 @mcp.tool()
-def start_scan(domain: str, with_msf: bool = True, excluded_steps: list[str] | None = None) -> str:
-    """Démarre un nouveau scan sur domain (DOMAIN_RE de pentest.py : nom de domaine valide,
-    *.lab.local pour le lab local). with_msf=False retire l'étape Metasploit en fin de chaîne.
-    excluded_steps : step_id à ne jamais exécuter pour ce scan (voir excludable_steps) --
-    enregistrés SKIP tout de suite, jamais lancés. Retourne {"scan_id": ...} ou {"error": ...}
-    si domain n'est pas un nom de domaine valide."""
-    if not pentest.DOMAIN_RE.match(domain):
+def start_scan(domain: str, with_msf: bool = True, excluded_steps: list[str] | None = None,
+               priority: int = 5) -> str:
+    """Démarre un nouveau scan sur domain.
+    priority : 1=Urgente, 3=Haute, 5=Normale (défaut), 7=Basse, 9=Arrière-plan."""
+    if not DOMAIN_RE.match(domain):
         return json.dumps({"error": f"domaine invalide : {domain!r}"})
-    scan_id = tasks.start_scan(domain, with_msf=with_msf, excluded_steps=excluded_steps)
+    if priority not in _VALID_PRIORITIES:
+        priority = 5
+    scan_id = _scheduler_start_scan(domain, with_msf=with_msf, excluded_steps=excluded_steps, priority=priority)
     return json.dumps({"scan_id": scan_id})
 
 
 @mcp.tool()
+def set_scan_priority(scan_id: str, priority: int) -> str:
+    """Change la priorité d'un scan existant.
+    priority : 1=Urgente, 3=Haute, 5=Normale, 7=Basse, 9=Arrière-plan."""
+    if priority not in _VALID_PRIORITIES:
+        return json.dumps({"error": f"priorité invalide : {priority!r} — valeurs autorisées : 1, 3, 5, 7, 9"})
+    if not _set_scan_priority(scan_id, priority):
+        return json.dumps({"error": f"scan {scan_id} introuvable"})
+    return json.dumps({"ok": True, "priority": priority, "label": _PRIORITY_LABELS[priority]})
+
+
+@mcp.tool()
 def skip_step(scan_id: str, step_id: str) -> str:
-    """Saute step_id s'il est RUNNING pour scan_id, sans arrêter le reste du scan (les autres
-    étapes indépendantes éventuellement en parallèle continuent normalement) -- à distinguer
-    d'un arrêt complet, non exposé par ce serveur. step_id : voir scan_detail(scan_id) pour la
-    liste des étapes et leur statut. Retourne {"skipped": true} si step_id était RUNNING,
-    {"skipped": false} sinon (déjà terminée, pas encore démarrée, ou scan arrêté)."""
-    return json.dumps({"skipped": db_insert.request_skip(scan_id, step_id)})
+    """Saute step_id s'il est RUNNING pour scan_id, sans arrêter le reste du scan."""
+    return json.dumps({"skipped": _request_skip(scan_id, step_id)})
 
 
 if __name__ == "__main__":

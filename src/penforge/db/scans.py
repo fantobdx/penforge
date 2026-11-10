@@ -3,10 +3,16 @@ import psycopg2.extras
 from penforge.db.connection import _cursor, _read_report_content
 
 
-def start_scan(domain, excluded=None):
+PRIORITY_CHOICES = {1: "Urgente", 3: "Haute", 5: "Normale", 7: "Basse", 9: "Arrière-plan"}
+_VALID_PRIORITIES = frozenset(PRIORITY_CHOICES)
+
+
+def start_scan(domain, excluded=None, priority=5):
     """Insère un nouveau scan. excluded : liste de (step_id, label) enregistrés SKIP d'emblée."""
+    if priority not in _VALID_PRIORITIES:
+        priority = 5
     with _cursor() as cur:
-        cur.execute("INSERT INTO scans (domain) VALUES (%s) RETURNING id", (domain,))
+        cur.execute("INSERT INTO scans (domain, priority) VALUES (%s, %s) RETURNING id", (domain, priority))
         scan_id = cur.fetchone()[0]
         for step_id, label in excluded or []:
             cur.execute(
@@ -29,10 +35,11 @@ def finish_scan(scan_id, ok, fail, skip):
         )
 
 
-def append_logs(scan_id, lines):
+def append_logs(scan_id, lines, step_id=None):
     with _cursor() as cur:
         psycopg2.extras.execute_values(
-            cur, "INSERT INTO scan_logs (scan_id, line) VALUES %s", [(scan_id, line) for line in lines]
+            cur, "INSERT INTO scan_logs (scan_id, line, step_id) VALUES %s",
+            [(scan_id, line, step_id) for line in lines],
         )
 
 
@@ -72,6 +79,14 @@ def resume_scan(scan_id):
         done = {r[0] for r in cur.fetchall()}
         cur.execute("UPDATE jobs SET status = 'running' WHERE scan_id = %s", (scan_id,))
     return domain, done
+
+
+def begin_rerun(scan_id):
+    """Retourne le domaine du scan si actif, None sinon."""
+    with _cursor() as cur:
+        cur.execute("SELECT domain FROM scans WHERE id = %s AND finished_at IS NULL", (scan_id,))
+        row = cur.fetchone()
+    return row[0] if row else None
 
 
 def tally_latest_statuses(scan_id):
@@ -131,6 +146,21 @@ def get_findings(scan_id, step_id=None, severity=None):
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def get_scan_priority(scan_id):
+    with _cursor() as cur:
+        cur.execute("SELECT priority FROM scans WHERE id = %s", (scan_id,))
+        row = cur.fetchone()
+    return row[0] if row else 5
+
+
+def set_scan_priority(scan_id, priority):
+    if priority not in _VALID_PRIORITIES:
+        return False
+    with _cursor() as cur:
+        cur.execute("UPDATE scans SET priority = %s WHERE id = %s RETURNING id", (priority, scan_id))
+        return cur.fetchone() is not None
 
 
 def insert_findings(scan_id, findings):

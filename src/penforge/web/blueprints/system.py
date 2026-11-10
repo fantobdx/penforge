@@ -27,6 +27,13 @@ EVENTS_WINDOW = 500
 SNAPSHOT_LIMIT = 200
 QUEUE_NAME = "celery"
 UNACKED_KEY = "unacked"
+_PRIORITY_SEPARATOR = "\x06\x16"
+_MAX_PRIORITY = _celery_app.conf.task_queue_max_priority or 0
+_QUEUE_KEYS = (
+    [QUEUE_NAME]
+    if not _MAX_PRIORITY
+    else [QUEUE_NAME] + [f"{QUEUE_NAME}{_PRIORITY_SEPARATOR}{p}" for p in range(_MAX_PRIORITY + 1)]
+)
 
 DOCKER_INTERVAL_S = 5
 DOCKER_SAMPLE_WINDOW = 720
@@ -140,9 +147,11 @@ def _task_info(raw):
 
 def _read_queue():
     pending = {}
-    for item in _redis_client.lrange(QUEUE_NAME, 0, -1):
-        info = _task_info(json.loads(item))
-        pending[info["id"]] = info
+    for key in _QUEUE_KEYS:
+        for item in _redis_client.lrange(key, 0, -1):
+            info = _task_info(json.loads(item))
+            if info["id"]:
+                pending[info["id"]] = info
     unacked = {}
     for value in _redis_client.hvals(UNACKED_KEY):
         info = _task_info(json.loads(value)[0])

@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS scan_logs (
 
 CREATE INDEX IF NOT EXISTS scan_logs_scan_id_idx ON scan_logs(scan_id, id);
 
+ALTER TABLE scan_logs ADD COLUMN IF NOT EXISTS step_id TEXT;
+CREATE INDEX IF NOT EXISTS scan_logs_step_idx ON scan_logs(scan_id, step_id, id);
+
 -- Contrôle depuis le web (arrêter / reprendre / relancer un outil), orchestré par Celery.
 ALTER TABLE scan_steps DROP CONSTRAINT IF EXISTS scan_steps_status_check;
 ALTER TABLE scan_steps ADD CONSTRAINT scan_steps_status_check
@@ -89,3 +92,7 @@ CREATE TABLE IF NOT EXISTS findings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS findings_scan_id_idx ON findings(scan_id);
+
+-- Priorité d'exécution du scan : 1 (Urgente) → 3 (Haute) → 5 (Normale) → 7 (Basse) → 9 (Arrière-plan).
+-- Convertie en priorité Celery à l'envoi de chaque tâche (10 - priority).
+ALTER TABLE scans ADD COLUMN IF NOT EXISTS priority SMALLINT NOT NULL DEFAULT 5;
