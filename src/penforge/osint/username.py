@@ -33,7 +33,7 @@ def run_username(username, outdir):
 
     def _sherlock():
         sherlock_result["out"] = _run_capture(
-            ["sherlock", username, "--timeout", "15"], _TIMEOUT_SHERLOCK
+            ["sherlock", username, "--timeout", "15", "--print-found", "--no-color"], _TIMEOUT_SHERLOCK
         )
 
     def _maigret():
@@ -43,7 +43,7 @@ def run_username(username, outdir):
             maigret_result["out"] = ""
             return
         maigret_result["out"] = _run_capture(
-            ["maigret", username, "--no-color", "--timeout", "10"],
+            ["maigret", username, "--no-color", "--timeout", "15", "-a", "--html"],
             _TIMEOUT_MAIGRET,
         )
 

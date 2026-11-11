@@ -86,20 +86,17 @@ services:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?definir REDIS_PASSWORD dans le fichier .env}@redis:6379/1
       WAPITI_ENDPOINT_IP: "172.20.0.5"
-      BLACKARCH_MCP_STATE_DIR: /var/lib/blackarch-mcp
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8765:8765"
       - "127.0.0.1:8766:8766"
     volumes:
       - pentest-reports:/reports
-      - exploits-data:/usr/share/exploits
-      - blackarch-mcp-state:/var/lib/blackarch-mcp
       - osint-uploads:/osint
+      - seclists-data:/usr/share/seclists
     networks: [default, lab]
     tty: true
 
@@ -305,6 +302,5 @@ services:
 volumes:
   pentest-reports:
   pentest-db-data:
-  blackarch-mcp-state:
-  exploits-data:
   osint-uploads:
+  seclists-data:

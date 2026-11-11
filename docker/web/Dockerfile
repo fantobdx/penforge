@@ -1,18 +1,15 @@
 # syntax=docker/dockerfile:1
-FROM archlinux:latest
+FROM python:3.13-alpine
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /usr/local/bin/
 
 ENV UV_LINK_MODE=copy
 
-RUN --mount=type=cache,target=/var/cache/pacman/pkg,sharing=locked \
-    pacman -Syu --noconfirm --needed --disable-sandbox python gcc postgresql-libs && \
-    rm -rf /var/lib/pacman/sync/
+RUN --mount=type=cache,target=/var/cache/apk,sharing=locked \
+    apk add --update gcc musl-dev libffi-dev libgit2-dev
 
 WORKDIR /app
 
-# P3 : installer les dépendances AVANT de copier le code source
-# → tout changement dans src/ n'invalide pas le layer uv pip install
 COPY pyproject.toml /app/
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p /app/src/penforge && \
@@ -25,11 +22,10 @@ COPY web/static/ /app/src/penforge/web/static/
 ARG PENTEST_UID=1000
 ARG PENTEST_GID=1000
 ARG DOCKER_GID=999
-RUN groupadd -g ${PENTEST_GID} pentest && \
-    useradd -u ${PENTEST_UID} -g ${PENTEST_GID} -m -d /home/pentest -s /usr/sbin/nologin pentest && \
-    groupadd -g ${DOCKER_GID} docker 2>/dev/null || \
-        groupmod -g ${DOCKER_GID} docker 2>/dev/null || true && \
-    usermod -aG docker pentest && \
+RUN addgroup -g ${PENTEST_GID} pentest && \
+    adduser -u ${PENTEST_UID} -G pentest -D -h /home/pentest -s /sbin/nologin pentest && \
+    addgroup -g ${DOCKER_GID} docker 2>/dev/null || true && \
+    adduser pentest docker && \
     chown -R pentest:pentest /app /home/pentest
 USER pentest
 

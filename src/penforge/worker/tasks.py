@@ -14,6 +14,17 @@ from penforge.db import tor as _db_tor
 from penforge.ioc.extract import write_report as _ioc_write_report
 import penforge.pentest.proxy as _proxy
 
+_redis_client = None
+_TOR_READY_KEY = "penforge:tor_ready"
+
+
+def _get_redis():
+    global _redis_client
+    if _redis_client is None:
+        import redis
+        _redis_client = redis.from_url(config.CELERY_BROKER_URL, decode_responses=True)
+    return _redis_client
+
 try:
     from penforge.osint import OSINT_ROOT as _OSINT_ROOT
     from penforge.osint.username import run_username as _run_username
@@ -25,19 +36,24 @@ try:
 except ImportError:
     _osint_available = False
 
-_TOR_AVAILABLE = True
-
 
 @worker_ready.connect
 def _on_worker_ready(**_kwargs):
-    global _TOR_AVAILABLE
+    try:
+        _get_redis().delete(_TOR_READY_KEY)
+    except Exception:
+        pass
     try:
         _db_steps.recover_crashed_steps()
     except Exception as exc:
         log_error(f"recover_crashed_steps a échoué (schéma DB manquant ?) : {exc}")
-    if not start_tor_pool():
+    available = start_tor_pool()
+    if not available:
         log_error("Instances Tor non disponibles. Scans pentest désactivés. OSINT opérationnel.")
-        _TOR_AVAILABLE = False
+    try:
+        _get_redis().set(_TOR_READY_KEY, "1" if available else "0", ex=86400)
+    except Exception:
+        pass
 
 
 @app.task(bind=True, soft_time_limit=config.STEP_TIMEOUT,
@@ -46,39 +62,51 @@ def run_step_task(self, scan_id, domain, step_id):
     local = is_local_target(domain)
     _proxy.USE_TOR = not local
 
-    if not local and not _TOR_AVAILABLE:
-        row_id = _db_steps.mark_step_running(scan_id, step_id, STEP_LABEL[step_id], self.request.id)
-        if row_id is not None:
-            _db_steps.finish_step(row_id, "FAIL", "", note="Tor non disponible au démarrage du worker.")
-        return "TOR_UNAVAILABLE"
+    if not local:
+        try:
+            tor_status = _get_redis().get(_TOR_READY_KEY)
+        except Exception:
+            tor_status = "1"
+        if tor_status is None:
+            # Bootstrap Tor en cours dans le MainProcess — réessayer dans 15s
+            raise self.retry(countdown=15, max_retries=config.STEP_TIMEOUT // 30)
+        if tor_status == "0":
+            row_id = _db_steps.mark_step_running(scan_id, step_id, STEP_LABEL[step_id], self.request.id)
+            if row_id is not None:
+                _db_steps.finish_step(row_id, "FAIL", "", note="Tor non disponible au démarrage du worker.")
+            return "TOR_UNAVAILABLE"
 
     port = None
-    if not local:
-        port = _db_tor.acquire_tor_port(self.request.id)
-        if port is None:
-            raise self.retry(countdown=15, max_retries=config.STEP_TIMEOUT // 15)
-
-    scan_dir = os.path.join(config.SCANS_ROOT, str(scan_id))
-    os.makedirs(scan_dir, exist_ok=True)
-    conf_path = None
-    if not local:
-        conf_path = os.path.join(scan_dir, f".tor-{self.request.id}.conf")
-        write_proxychains_conf(conf_path)
-        set_proxy_conf(conf_path)
-
-    step_row_id = _db_steps.mark_step_running(scan_id, step_id, STEP_LABEL[step_id], self.request.id)
     try:
-        if step_row_id is None:
-            return "STOPPED"
-        old_cwd = os.getcwd()
+        if not local:
+            port = _db_tor.acquire_tor_port(self.request.id)
+            if port is None:
+                raise self.retry(countdown=30, max_retries=config.STEP_TIMEOUT // 30)
+            _proxy.set_current_tor_port(port)
+
+        scan_dir = os.path.join(config.SCANS_ROOT, str(scan_id))
+        os.makedirs(scan_dir, exist_ok=True)
+        conf_path = None
+        if not local:
+            conf_path = os.path.join(scan_dir, f".tor-{self.request.id}.conf")
+            write_proxychains_conf(conf_path)
+            set_proxy_conf(conf_path)
+
+        step_row_id = _db_steps.mark_step_running(scan_id, step_id, STEP_LABEL[step_id], self.request.id)
         try:
-            os.chdir(scan_dir)
-            return execute_step(scan_id, domain, step_id, step_row_id)
+            if step_row_id is None:
+                return "STOPPED"
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(scan_dir)
+                return execute_step(scan_id, domain, step_id, step_row_id)
+            finally:
+                os.chdir(old_cwd)
         finally:
-            os.chdir(old_cwd)
+            if conf_path and os.path.exists(conf_path):
+                os.remove(conf_path)
     finally:
-        if conf_path and os.path.exists(conf_path):
-            os.remove(conf_path)
+        _proxy.set_current_tor_port(None)
         if port is not None:
             _db_tor.release_tor_port(port)
 

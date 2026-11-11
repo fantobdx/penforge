@@ -1,5 +1,6 @@
 from celery import chain, chord, group
 
+from penforge import config
 from penforge.pentest.steps import STEPS, STEP_LABEL
 from penforge.db import scans as _db_scans
 from penforge.worker.tasks import run_step_task, finalize_scan, recompute_counts, fail_scan
@@ -9,7 +10,7 @@ PHASE1_STEPS = frozenset({"subfinder", "nmap", "whois", "theharvester"})
 
 STEP_DEPENDENCIES = {
     "whatweb": ("sploitctl_lookup", "metasploit"),
-    "katana": ("wfuzz", "trufflehog_web", "sqlmap"),
+    "katana": ("ffuf", "trufflehog_web", "sqlmap"),
     "wpscan": ("wp_bruteforce",),
     "wp_bruteforce": ("credential_spray",),
     "httpx": ("dirsearch", "nikto", "nuclei", "dirb"),
@@ -37,7 +38,7 @@ def _build_branch(start, remaining, handled, sig):
 
 
 def _build_web_branches(step_ids, sig):
-    """Branches parallèles pour une liste de steps, en respectant STEP_DEPENDENCIES."""
+    """Branches parallèles respectant les dépendances STEP_DEPENDENCIES."""
     remaining = set(step_ids)
     branches, handled = [], set()
     dep_children = {c for children in STEP_DEPENDENCIES.values() for c in children}
@@ -48,21 +49,37 @@ def _build_web_branches(step_ids, sig):
             if any(parent in STEP_DEPENDENCIES.get(p, ()) and p in remaining for p in STEP_DEPENDENCIES):
                 continue
         branches.append(_build_branch(parent, remaining, handled, sig))
-    branches += [sig(s) for s in remaining if s not in handled]
+    for s in [s for s in remaining if s not in handled]:
+        branches.append(sig(s))
     return branches
+
+
+def _chunked_chord(lots, tail, fail_callback):
+    """Dispatch les branches par lots séquentiels : le lot N démarre quand le lot N-1 est terminé."""
+    if not lots:
+        return tail
+    batch = lots[0]
+    rest = lots[1:]
+    callback = _chunked_chord(rest, tail, fail_callback)
+    if len(batch) == 1:
+        return chain(batch[0], callback)
+    return chord(group(*batch), callback).on_error(fail_callback)
 
 
 def _schedule_for(scan_id, domain, step_ids, tail, priority=5):
     cp = _celery_priority(priority)
-    sig = lambda step_id: run_step_task.si(scan_id, domain, step_id).set(priority=cp)  # noqa: E731
+    capacity = config.SCAN_WORKERS
+
+    def sig(step_id):
+        return run_step_task.si(scan_id, domain, step_id).set(priority=cp)
+
     p1 = [s for s in step_ids if s in PHASE1_STEPS]
     p2 = [s for s in step_ids if s not in PHASE1_STEPS]
 
     if p2:
-        p2_body = chord(
-            group(*_build_web_branches(p2, sig)),
-            tail.si(scan_id),
-        ).on_error(fail_scan.s(scan_id))
+        branches = _build_web_branches(p2, sig)
+        lots = [branches[i:i + capacity] for i in range(0, len(branches), capacity)]
+        p2_body = _chunked_chord(lots, tail.si(scan_id), fail_scan.s(scan_id))
     else:
         p2_body = tail.si(scan_id)
 

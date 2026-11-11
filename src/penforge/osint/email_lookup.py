@@ -18,12 +18,24 @@ def _strip_ansi(text):
 
 def run_email(email, outdir):
     report = os.path.join(outdir, "holehe-report.txt")
-    result = subprocess.run(
-        ["holehe", email, "--only-used", "--no-clear"],
-        capture_output=True, text=True, timeout=_TIMEOUT,
-    )
+    try:
+        result = subprocess.run(
+            ["holehe", email, "--only-used", "--no-clear"],
+            capture_output=True, text=True, timeout=_TIMEOUT,
+        )
+        raw_stdout = result.stdout
+    except FileNotFoundError:
+        output = "(holehe non disponible)"
+        with open(report, "w", encoding="utf-8") as fh:
+            fh.write(output)
+        return output
+    except subprocess.TimeoutExpired:
+        output = f"(timeout après {_TIMEOUT}s)"
+        with open(report, "w", encoding="utf-8") as fh:
+            fh.write(output)
+        return output
     lines = []
-    for raw_line in _strip_ansi(result.stdout).splitlines():
+    for raw_line in _strip_ansi(raw_stdout).splitlines():
         line = raw_line.strip()
         if not line or _HOLEHE_SKIP.match(line):
             continue

@@ -54,6 +54,7 @@ _proc_cache: list = []
 _proc_lock = threading.Lock()
 
 _prev_cumul: dict = {}
+_prev_tor_rotations: int = 0
 
 _CONN_ORDER = {"ESTAB": 0, "SYN_SENT": 1, "CLOSE_WAIT": 2, "FIN_WAIT1": 3,
                "FIN_WAIT2": 4, "TIME_WAIT": 5, "LISTEN": 6}
@@ -160,6 +161,7 @@ def _read_queue():
 
 
 def _take_server_metrics():
+    global _prev_tor_rotations
     memory = _redis_client.info("memory")["used_memory"]
     clients = _redis_client.info("clients")["connected_clients"]
     capacity, busy = 0, 0
@@ -169,7 +171,21 @@ def _take_server_metrics():
             capacity, busy = cur.fetchone()
     except psycopg2.errors.UndefinedTable:
         pass
-    return {"busy": busy, "capacity": capacity, "memory_mb": round(memory / 1024 / 1024, 2), "clients": clients}
+    rotations_delta = 0
+    try:
+        val = _redis_client.get("penforge:tor_rotations")
+        total = int(val) if val else 0
+        rotations_delta = max(0, total - _prev_tor_rotations)
+        _prev_tor_rotations = total
+    except Exception:
+        pass
+    return {
+        "busy": busy,
+        "capacity": capacity,
+        "memory_mb": round(memory / 1024 / 1024, 2),
+        "clients": clients,
+        "tor_rotations": rotations_delta,
+    }
 
 
 def _diff_events(before_pending, before_unacked, pending, unacked, now):

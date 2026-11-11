@@ -11,10 +11,15 @@ def _strip_ansi(text):
 
 
 def _run(argv, report_path, timeout=_TIMEOUT):
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    output = _strip_ansi(result.stdout)
-    if result.stderr.strip():
-        output += "\n--- stderr ---\n" + _strip_ansi(result.stderr)
+    try:
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        output = _strip_ansi(result.stdout)
+        if result.stderr.strip():
+            output += "\n--- stderr ---\n" + _strip_ansi(result.stderr)
+    except FileNotFoundError:
+        output = f"({argv[0]} non disponible)"
+    except subprocess.TimeoutExpired:
+        output = f"(timeout après {timeout}s)"
     with open(report_path, "w", encoding="utf-8") as fh:
         fh.write(output)
     return output
